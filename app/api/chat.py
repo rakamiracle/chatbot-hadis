@@ -9,55 +9,28 @@ from app.models.chat_history import ChatHistory
 import uuid
 
 router = APIRouter()
-embedding_service = EmbeddingService()
-vector_search = VectorSearch()
-llm_service = LLMService()
 
 @router.post("/", response_model=ChatResponse)
-async def chat(
-    request: ChatRequest,
-    db: AsyncSession = Depends(get_db)
-):
-    try:
-        # Generate query embedding
-        query_embedding = await embedding_service.generate_embedding(request.query)
-        
-        # Search similar chunks
-        similar_chunks = await vector_search.search_similar(query_embedding, db)
-        
-        if not similar_chunks:
-            raise HTTPException(404, "Tidak ditemukan hadis yang relevan")
-        
-        # Generate response from LLM
-        answer = await llm_service.generate_response(request.query, similar_chunks)
-        
-        # Prepare sources
-        sources = [
-            Source(
-                chunk_id=chunk['chunk_id'],
-                text=chunk['text'][:200] + "...",
-                page_number=chunk['page_number'],
-                similarity_score=chunk['similarity']
-            )
-            for chunk in similar_chunks
-        ]
-        
-        # Save to history
-        session_id = request.session_id or str(uuid.uuid4())
-        history = ChatHistory(
-            session_id=session_id,
-            user_query=request.query,
-            bot_response=answer,
-            sources=[s.dict() for s in sources]
-        )
-        db.add(history)
-        await db.commit()
-        
-        return ChatResponse(
-            answer=answer,
-            sources=sources,
-            session_id=session_id
-        )
+async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
+    embed = EmbeddingService()
+    search = VectorSearch()
+    llm = LLMService()
     
-    except Exception as e:
-        raise HTTPException(500, f"Error: {str(e)}")
+    qemb = await embed.generate_embedding(request.query)
+    chunks = await search.search_similar(qemb, db)
+    
+    if not chunks:
+        raise HTTPException(404, "No relevant hadis found")
+    
+    answer = await llm.generate_response(request.query, chunks)
+    sources = [Source(chunk_id=c['chunk_id'], text=c['text'][:200], 
+                      page_number=c['page_number'], similarity_score=c['similarity']) 
+               for c in chunks]
+    
+    sid = request.session_id or str(uuid.uuid4())
+    hist = ChatHistory(session_id=uuid.UUID(sid) if request.session_id else uuid.uuid4(),
+                       user_query=request.query, bot_response=answer, sources=[])
+    db.add(hist)
+    await db.commit()
+    
+    return ChatResponse(answer=answer, sources=sources, session_id=sid)

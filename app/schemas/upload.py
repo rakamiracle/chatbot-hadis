@@ -6,4 +6,3 @@ class UploadResponse(BaseModel):
     filename: str
     status: str
     upload_date: datetime
-    message: str
