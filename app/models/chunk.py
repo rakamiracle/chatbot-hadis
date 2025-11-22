@@ -7,14 +7,12 @@ from datetime import datetime
 
 class HadisChunk(Base):
     __tablename__ = "hadis_chunks"
-    
     id = Column(Integer, primary_key=True, index=True)
     document_id = Column(Integer, ForeignKey("hadis_documents.id", ondelete="CASCADE"))
     chunk_text = Column(Text, nullable=False)
     chunk_index = Column(Integer)
     page_number = Column(Integer)
-    embedding = Column(Vector(384))  # Dimensi model embedding
-    metadata = Column(JSONB)
+    embedding = Column(Vector(384))
+    chunk_metadata = Column(JSONB)  # ← Ganti dari metadata ke chunk_metadata
     created_at = Column(DateTime, default=datetime.utcnow)
-    
     document = relationship("HadisDocument", back_populates="chunks")

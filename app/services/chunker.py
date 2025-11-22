@@ -1,27 +1,12 @@
-from typing import List, Dict
-
 class HadisChunker:
-    def __init__(self, chunk_size: int = 1000, chunk_overlap: int = 200):
+    def __init__(self, chunk_size=800, overlap=150):
         self.chunk_size = chunk_size
-        self.chunk_overlap = chunk_overlap
+        self.overlap = overlap
     
-    async def chunk_text(self, text: str, page_number: int = 1) -> List[Dict]:
+    async def chunk_text(self, text: str, page_number: int):
         chunks = []
-        start = 0
-        chunk_index = 0
-        
-        while start < len(text):
-            end = start + self.chunk_size
-            chunk_text = text[start:end]
-            
-            if chunk_text.strip():
-                chunks.append({
-                    "text": chunk_text,
-                    "chunk_index": chunk_index,
-                    "page_number": page_number
-                })
-                chunk_index += 1
-            
-            start = end - self.chunk_overlap
-        
+        for i, start in enumerate(range(0, len(text), self.chunk_size - self.overlap)):
+            chunk = text[start:start + self.chunk_size].strip()
+            if chunk:
+                chunks.append({"text": chunk, "chunk_index": i, "page_number": page_number})
         return chunks

@@ -8,63 +8,43 @@ from app.services.chunker import HadisChunker
 from app.services.embedding_service import EmbeddingService
 from app.schemas.upload import UploadResponse
 from config import settings
-import os
-import shutil
+import os, shutil
 
 router = APIRouter()
-pdf_processor = PDFProcessor()
-chunker = HadisChunker()
-embedding_service = EmbeddingService()
 
 @router.post("/", response_model=UploadResponse)
-async def upload_pdf(
-    file: UploadFile = File(...),
-    db: AsyncSession = Depends(get_db)
-):
-    # Validasi
+async def upload_pdf(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
     if not file.filename.endswith('.pdf'):
-        raise HTTPException(400, "Only PDF files allowed")
+        raise HTTPException(400, "Only PDF")
     
-    # Save file
-    file_path = os.path.join(settings.UPLOAD_DIR, file.filename)
-    with open(file_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    path = os.path.join(settings.UPLOAD_DIR, file.filename)
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
     
     try:
-        # Extract PDF
-        pdf_data = await pdf_processor.extract_text(file_path)
+        pdf = PDFProcessor()
+        chunker = HadisChunker()
+        embed = EmbeddingService()
         
-        # Create document record
-        doc = HadisDocument(
-            filename=file.filename,
-            total_pages=pdf_data['total_pages'],
-            status=DocumentStatus.PROCESSING
-        )
+        data = await pdf.extract_text(path)
+        doc = HadisDocument(filename=file.filename, total_pages=data['total_pages'])
         db.add(doc)
         await db.flush()
         
-        # Process chunks
-        for page_data in pdf_data['pages']:
-            chunks = await chunker.chunk_text(
-                page_data['text'],
-                page_data['page_number']
-            )
-            
-            # Generate embeddings dan save
-            for chunk_data in chunks:
-                embedding = await embedding_service.generate_embedding(chunk_data['text'])
-                
+        for page in data['pages']:
+            for chunk_data in await chunker.chunk_text(page['text'], page['page_number']):
+                emb = await embed.generate_embedding(chunk_data['text'])
                 chunk = HadisChunk(
                     document_id=doc.id,
                     chunk_text=chunk_data['text'],
                     chunk_index=chunk_data['chunk_index'],
                     page_number=chunk_data['page_number'],
-                    embedding=embedding,
-                    metadata={}
+                    embedding=emb,
+                    chunk_metadata={}  # ← Ganti jadi chunk_metadata
                 )
                 db.add(chunk)
         
-        # Update status
         doc.status = DocumentStatus.COMPLETED
         await db.commit()
         
@@ -72,12 +52,10 @@ async def upload_pdf(
             document_id=doc.id,
             filename=doc.filename,
             status=doc.status.value,
-            upload_date=doc.upload_date,
-            message="PDF berhasil diproses"
+            upload_date=doc.upload_date
         )
-    
     except Exception as e:
         await db.rollback()
-        raise HTTPException(500, f"Error processing PDF: {str(e)}")
+        raise HTTPException(500, str(e))
     finally:
-        os.remove(file_path)
+        os.remove(path)
