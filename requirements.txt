@@ -1,0 +1,15 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+python-multipart==0.0.18
+jinja2==3.1.4
+SQLAlchemy==2.0.36
+asyncpg==0.30.0
+pgvector==0.3.6
+PyMuPDF==1.24.14
+sentence-transformers==3.3.1
+torch
+ollama==0.4.4
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.6.1
+loguru==0.7.3
