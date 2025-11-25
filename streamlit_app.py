@@ -12,6 +12,8 @@ if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
 if "messages" not in st.session_state:
     st.session_state.messages = []
+if "kitab_filter" not in st.session_state:
+    st.session_state.kitab_filter = None
 
 # Sidebar
 with st.sidebar:
@@ -35,7 +37,33 @@ with st.sidebar:
                         st.error(f"❌ Error: {response.text}")
                 except Exception as e:
                     st.error(f"❌ Gagal upload: {str(e)}")
-    
+
+    # ==========================
+    # 🔥 CODE BARU: Filter Dokumen
+    # ==========================
+    st.markdown("---")
+    st.subheader("📚 Filter Dokumen")
+
+    try:
+        kitab_response = requests.get(f"{API_URL}/documents/kitab/list")
+        if kitab_response.status_code == 200:
+            kitab_data = kitab_response.json()
+            kitab_list = ["Semua Kitab"] + [k['kitab'] for k in kitab_data['kitab'] if k['kitab']]
+            
+            selected_kitab = st.selectbox("Pilih Kitab", kitab_list)
+            
+            if selected_kitab != "Semua Kitab":
+                st.session_state.kitab_filter = selected_kitab
+            else:
+                st.session_state.kitab_filter = None
+        else:
+            st.session_state.kitab_filter = None
+    except:
+        st.session_state.kitab_filter = None
+    # ==========================
+    # 🔥 END CODE BARU
+    # ==========================
+
     st.markdown("---")
     if st.button("🗑️ Hapus Riwayat Chat", use_container_width=True):
         st.session_state.messages = []
@@ -57,21 +85,27 @@ for message in st.session_state.messages:
                     st.text(src['text'])
                     st.markdown("---")
 
-# Chat input
+# ======================================
+# 🔥 INPUT BARU: Chat + Filter Kitab
+# ======================================
 if prompt := st.chat_input("Tanyakan tentang hadis..."):
-    # Add user message
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
-    # Get bot response
     with st.chat_message("assistant"):
         with st.spinner("Mencari jawaban..."):
             try:
-                response = requests.post(
-                    f"{API_URL}/chat/",
-                    json={"query": prompt, "session_id": st.session_state.session_id}
-                )
+                payload = {
+                    "query": prompt,
+                    "session_id": st.session_state.session_id
+                }
+                
+                # Tambahkan filter jika ada
+                if hasattr(st.session_state, 'kitab_filter') and st.session_state.kitab_filter:
+                    payload["kitab_filter"] = st.session_state.kitab_filter
+                
+                response = requests.post(f"{API_URL}/chat/", json=payload)
                 
                 if response.status_code == 200:
                     data = response.json()
@@ -79,29 +113,30 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                     sources = data["sources"]
                     
                     st.markdown(answer)
-                    
-                    # Save to history
+
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": answer,
                         "sources": sources
                     })
                     
-                    # Show sources
                     with st.expander("📚 Lihat Sumber"):
                         for i, src in enumerate(sources, 1):
                             st.markdown(f"**Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
                             st.text(src['text'])
                             st.markdown("---")
                 else:
-                    error_msg = f"Error {response.status_code}: {response.text}"
-                    st.error(error_msg)
-                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                    err = f"Error {response.status_code}: {response.text}"
+                    st.error(err)
+                    st.session_state.messages.append({"role": "assistant", "content": err})
             
             except Exception as e:
-                error_msg = f"Gagal menghubungi server: {str(e)}"
-                st.error(error_msg)
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                err = f"Gagal menghubungi server: {str(e)}"
+                st.error(err)
+                st.session_state.messages.append({"role": "assistant", "content": err})
+# ======================================
+# 🔥 END INPUT BARU
+# ======================================
 
 # Footer
 st.markdown("---")

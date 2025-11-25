@@ -1,3 +1,5 @@
+from app.services.document_metadata_extractor import DocumentMetadataExtractor
+from app.services.text_cleaner import HadisTextCleaner
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database.connection import get_db
@@ -14,6 +16,74 @@ router = APIRouter()
 
 @router.post("/", response_model=UploadResponse)
 async def upload_pdf(file: UploadFile = File(...), db: AsyncSession = Depends(get_db)):
+    if not file.filename.endswith('.pdf'):
+        raise HTTPException(400, "Only PDF")
+    
+    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    path = os.path.join(settings.UPLOAD_DIR, file.filename)
+    with open(path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+    
+    try:
+        # Services
+        pdf = PDFProcessor()
+        chunker = HadisChunker()
+        embed = EmbeddingService()
+        meta_extractor = DocumentMetadataExtractor()
+        cleaner = HadisTextCleaner()
+        
+        # Extract document metadata
+        doc_metadata = await meta_extractor.extract_from_pdf(path)
+        
+        # Extract text
+        data = await pdf.extract_text(path)
+        
+        # Create document with metadata
+        doc = HadisDocument(
+            filename=file.filename,
+            total_pages=data['total_pages'],
+            kitab_name=doc_metadata.get('kitab_name'),
+            pengarang=doc_metadata.get('pengarang'),
+            penerbit=doc_metadata.get('penerbit'),
+            tahun_terbit=doc_metadata.get('tahun_terbit'),
+            doc_metadata=doc_metadata
+        )
+        db.add(doc)
+        await db.flush()
+        
+        # Process chunks dengan cleaning
+        for page in data['pages']:
+            # Clean text
+            cleaned_text = cleaner.extract_clean_hadis(page['text'])
+            
+            for chunk_data in await chunker.chunk_text(cleaned_text, page['page_number']):
+                emb = await embed.generate_embedding(chunk_data['text'])
+                chunk = HadisChunk(
+                    document_id=doc.id,
+                    chunk_text=chunk_data['text'],
+                    chunk_index=chunk_data['chunk_index'],
+                    page_number=chunk_data['page_number'],
+                    embedding=emb,
+                    chunk_metadata=chunk_data.get('metadata', {})
+                )
+                db.add(chunk)
+        
+        doc.status = DocumentStatus.COMPLETED
+        await db.commit()
+        
+        return UploadResponse(
+            document_id=doc.id,
+            filename=doc.filename,
+            status=doc.status.value,
+            upload_date=doc.upload_date
+        )
+    
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(500, str(e))
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
     if not file.filename.endswith('.pdf'):
         raise HTTPException(400, "Only PDF")
     
