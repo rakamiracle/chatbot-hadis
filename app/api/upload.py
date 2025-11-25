@@ -59,3 +59,16 @@ async def upload_pdf(file: UploadFile = File(...), db: AsyncSession = Depends(ge
         raise HTTPException(500, str(e))
     finally:
         os.remove(path)
+
+        for page in data['pages']:
+            for chunk_data in await chunker.chunk_text(page['text'], page['page_number']):
+                emb = await embed.generate_embedding(chunk_data['text'])
+                chunk = HadisChunk(
+                    document_id=doc.id,
+                    chunk_text=chunk_data['text'],
+                    chunk_index=chunk_data['chunk_index'],
+                    page_number=chunk_data['page_number'],
+                    embedding=emb,
+                    chunk_metadata=chunk_data.get('metadata', {})  # ← Simpan metadata
+                )
+                db.add(chunk)
