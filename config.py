@@ -9,6 +9,11 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "uploads"
     TOP_K_RESULTS: int = 5
     
+    # Performance settings
+    BATCH_SIZE: int = 50
+    EMBEDDING_BATCH_SIZE: int = 32
+    DB_POOL_SIZE: int = 10
+    
     class Config:
         env_file = ".env"
 
