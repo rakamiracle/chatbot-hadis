@@ -10,24 +10,28 @@ class VectorSearch:
     async def search_similar(
         self, 
         query_embedding: List[float],
-        query_text: str,  # Tambah raw query text
+        query_text: str,
         db: AsyncSession, 
         kitab_filter: Optional[str] = None,
         document_ids: Optional[List[int]] = None,
         top_k: int = None
     ) -> List[Dict]:
-        """Hybrid search: Vector + Keyword"""
+        """Hybrid search with optimization"""
         
         if top_k is None:
-            top_k = settings.TOP_K_RESULTS * 3  # Ambil lebih banyak untuk re-rank
+            top_k = settings.TOP_K_RESULTS * 2  # Reduce from 3x to 2x
         
-        # Extract keywords dari query
+        # Simplified keyword extraction
         keywords = self._extract_keywords(query_text)
         
-        # Vector search
+        # OPTIMIZATION: Simpler query, less joins
         vector_query = select(
-            HadisChunk,
-            HadisDocument,
+            HadisChunk.id,
+            HadisChunk.chunk_text,
+            HadisChunk.page_number,
+            HadisChunk.chunk_metadata,
+            HadisChunk.document_id,
+            HadisDocument.kitab_name,
             (1 - HadisChunk.embedding.cosine_distance(query_embedding)).label("similarity")
         ).join(
             HadisDocument, HadisChunk.document_id == HadisDocument.id
@@ -45,6 +49,7 @@ class VectorSearch:
         if conditions:
             vector_query = vector_query.where(and_(*conditions))
         
+        # OPTIMIZATION: Lower threshold for initial retrieval
         vector_query = vector_query.order_by(
             HadisChunk.embedding.cosine_distance(query_embedding)
         ).limit(top_k)
@@ -53,24 +58,26 @@ class VectorSearch:
         rows = result.all()
         
         candidates = []
-        for chunk, doc, similarity in rows:
-            if similarity >= 0.55:  # Lower threshold
-                # Keyword matching score
-                keyword_score = self._calculate_keyword_score(chunk.chunk_text, keywords)
+        for row in rows:
+            similarity = float(row.similarity)
+            
+            if similarity >= 0.5:  # Lower threshold
+                # Quick keyword score
+                keyword_score = sum(1 for kw in keywords if kw in row.chunk_text.lower()) / max(len(keywords), 1)
                 
                 candidates.append({
-                    "chunk_id": chunk.id,
-                    "text": chunk.chunk_text,
-                    "page_number": chunk.page_number,
-                    "similarity": float(similarity),
+                    "chunk_id": row.id,
+                    "text": row.chunk_text,
+                    "page_number": row.page_number,
+                    "similarity": similarity,
                     "keyword_score": keyword_score,
-                    "metadata": chunk.chunk_metadata or {},
-                    "kitab_name": doc.kitab_name,
-                    "document_id": doc.id
+                    "metadata": row.chunk_metadata or {},
+                    "kitab_name": row.kitab_name,
+                    "document_id": row.document_id
                 })
         
-        # Re-rank dengan hybrid score
-        ranked = self._hybrid_rerank(candidates, query_text)
+        # Quick re-rank
+        ranked = self._quick_rerank(candidates)
         
         return ranked[:settings.TOP_K_RESULTS]
     
@@ -85,73 +92,18 @@ class VectorSearch:
         
         return keywords
     
-    def _calculate_keyword_score(self, text: str, keywords: List[str]) -> float:
-        """Calculate keyword matching score"""
-        if not keywords:
-            return 0.0
-        
-        text_lower = text.lower()
-        matches = sum(1 for kw in keywords if kw in text_lower)
-        
-        return matches / len(keywords)
-    
-    def _hybrid_rerank(self, candidates: List[Dict], query: str) -> List[Dict]:
-        """Hybrid re-ranking: Vector + Keyword + Metadata + Query-specific"""
-        
-        for candidate in candidates:
-            vector_score = candidate['similarity']
-            keyword_score = candidate['keyword_score']
-            meta = candidate['metadata']
-            text = candidate['text']
+    def _quick_rerank(self, candidates: List[Dict]) -> List[Dict]:
+        """Faster re-ranking"""
+        for c in candidates:
+            # Simple scoring
+            score = (c['similarity'] * 0.7) + (c['keyword_score'] * 0.3)
             
-            # Base score: 70% vector + 30% keyword
-            base_score = (vector_score * 0.7) + (keyword_score * 0.3)
-            
-            # Metadata boosts
-            if meta.get('nomor_hadis'):
-                base_score += 0.05
+            meta = c['metadata']
             if meta.get('perawi'):
-                base_score += 0.05
-            if meta.get('kitab'):
-                base_score += 0.05
+                score += 0.05
             if meta.get('derajat') in ['shahih', 'sahih']:
-                base_score += 0.1
+                score += 0.1
             
-            # Query-specific boosts
-            query_lower = query.lower()
-            
-            # Boost jika query mention perawi dan chunk ada perawi yang sama
-            if 'bukhari' in query_lower and meta.get('perawi', '').lower() == 'bukhari':
-                base_score += 0.15
-            if 'muslim' in query_lower and meta.get('perawi', '').lower() == 'muslim':
-                base_score += 0.15
-            
-            # Boost untuk text yang lebih lengkap
-            text_length = len(text)
-            if text_length > 500:
-                base_score += 0.05
-            elif text_length < 200:
-                base_score -= 0.05
-            
-            # Boost jika ada exact phrase match
-            if any(phrase in text.lower() for phrase in self._extract_phrases(query)):
-                base_score += 0.1
-            
-            candidate['final_score'] = min(base_score, 1.0)
+            c['final_score'] = min(score, 1.0)
         
         return sorted(candidates, key=lambda x: x['final_score'], reverse=True)
-    
-    def _extract_phrases(self, query: str) -> List[str]:
-        """Extract important phrases (2-3 words)"""
-        words = query.lower().split()
-        phrases = []
-        
-        # Bigrams
-        for i in range(len(words) - 1):
-            phrases.append(' '.join(words[i:i+2]))
-        
-        # Trigrams
-        for i in range(len(words) - 2):
-            phrases.append(' '.join(words[i:i+3]))
-        
-        return phrases

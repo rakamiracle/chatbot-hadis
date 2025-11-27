@@ -10,6 +10,7 @@ from app.models.chat_history import ChatHistory
 from app.utils.logger import logger, log_query
 from datetime import datetime
 import uuid
+import asyncio
 
 router = APIRouter()
 
@@ -18,47 +19,59 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     start_time = datetime.utcnow()
     
     try:
-        logger.info(f"Chat request: {request.query[:100]}")
+        logger.info(f"Query: {request.query[:100]}")
         
-        embed = EmbeddingService()
-        search = VectorSearch()
-        llm = LLMService()
+        # Initialize services
+        embed_service = EmbeddingService()
+        search_service = VectorSearch()
+        llm_service = LLMService()
         
-        # Check cache untuk embedding
-        qemb = query_cache.get_embedding(request.query)
-        if qemb:
-            logger.info("Using cached embedding")
-        else:
-            qemb = await embed.generate_embedding(request.query)
-            query_cache.set_embedding(request.query, qemb)
-        
-        # Check cache untuk results
+        # OPTIMIZATION 1: Check full cache first
         cache_key_filters = {
             'kitab': request.kitab_filter,
             'docs': request.document_ids
         }
         
-        chunks = query_cache.get_results(request.query, cache_key_filters)
-        if chunks:
-            logger.info("Using cached search results")
+        cached_chunks = query_cache.get_results(request.query, cache_key_filters)
+        
+        if cached_chunks:
+            logger.info("✓ Full cache hit")
+            chunks = cached_chunks
         else:
-            # Search dengan hybrid method
-            chunks = await search.search_similar(
+            # OPTIMIZATION 2: Check embedding cache
+            qemb = query_cache.get_embedding(request.query)
+            
+            if qemb:
+                logger.info("✓ Embedding cache hit")
+            else:
+                logger.info("Generating embedding...")
+                qemb = await embed_service.generate_embedding(request.query)
+                query_cache.set_embedding(request.query, qemb)
+            
+            # Search
+            logger.info("Searching database...")
+            chunks = await search_service.search_similar(
                 qemb,
-                request.query,  # Pass raw query text
+                request.query,
                 db,
                 kitab_filter=request.kitab_filter,
                 document_ids=request.document_ids
             )
-            query_cache.set_results(request.query, chunks, cache_key_filters)
+            
+            if chunks:
+                query_cache.set_results(request.query, chunks, cache_key_filters)
         
         if not chunks:
-            logger.warning(f"No chunks found for query: {request.query}")
-            raise HTTPException(404, "Tidak ditemukan hadis yang relevan. Coba pertanyaan lain atau upload dokumen yang lebih sesuai.")
+            logger.warning("No chunks found")
+            raise HTTPException(404, "Tidak ditemukan hadis relevan. Coba kata kunci lain.")
         
-        # Generate response
-        answer = await llm.generate_response(request.query, chunks)
+        logger.info(f"Found {len(chunks)} chunks")
         
+        # OPTIMIZATION 3: Generate response (already optimized in LLM service)
+        logger.info("Generating answer...")
+        answer = await llm_service.generate_response(request.query, chunks)
+        
+        # Build sources
         sources = [
             Source(
                 chunk_id=c['chunk_id'],
@@ -68,30 +81,42 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 kitab_name=c.get('kitab_name'),
                 document_id=c['document_id']
             )
-            for c in chunks
+            for c in chunks[:5]  # Limit sources
         ]
         
+        # Save to history (don't await - fire and forget for speed)
         sid = request.session_id or str(uuid.uuid4())
-        hist = ChatHistory(
-            session_id=uuid.UUID(sid) if request.session_id else uuid.uuid4(),
-            user_query=request.query,
-            bot_response=answer,
-            sources=[]
+        asyncio.create_task(
+            save_chat_history(sid, request.query, answer)
         )
-        db.add(hist)
-        await db.commit()
         
         response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
         log_query(sid, request.query, response_time)
-        logger.info(f"Chat response in {response_time:.0f}ms")
+        logger.info(f"✓ Response in {response_time:.0f}ms")
         
         return ChatResponse(answer=answer, sources=sources, session_id=sid)
     
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Chat error: {str(e)}", exc_info=True)
+        logger.error(f"Error: {str(e)}", exc_info=True)
         raise HTTPException(500, f"Error: {str(e)}")
+
+async def save_chat_history(session_id: str, query: str, answer: str):
+    """Save chat history in background"""
+    try:
+        from app.database.connection import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            hist = ChatHistory(
+                session_id=uuid.UUID(session_id) if len(session_id) == 36 else uuid.uuid4(),
+                user_query=query,
+                bot_response=answer,
+                sources=[]
+            )
+            db.add(hist)
+            await db.commit()
+    except Exception as e:
+        logger.error(f"Error saving history: {e}")
 
 @router.post("/clear-cache")
 async def clear_cache():

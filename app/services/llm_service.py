@@ -141,12 +141,13 @@ JAWABAN:"""
             model=self.model,
             prompt=prompt,
             options={
-                "temperature": 0.2,  # Lower untuk konsistensi
-                "top_p": 0.85,
-                "top_k": 30,
-                "num_predict": 400,  # Shorter max length
-                "stop": ["\n\nPERTANYAAN:", "KONTEKS:", "INSTRUKSI:"],
-                "num_ctx": 2048,  # Context window
+                "temperature": 0.1,      # Lower = faster & more deterministic
+                "top_p": 0.8,
+                "top_k": 20,             # Lower = faster
+                "num_predict": 200,      # MUCH shorter max tokens
+                "stop": ["\n\n", "PERTANYAAN:", "KONTEKS:"],
+                "num_ctx": 1024,         # Smaller context window = faster
+                "num_thread": 4,         # Use CPU thread
             }
         )
         return response['response']
