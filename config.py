@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     BATCH_SIZE: int = 50
     EMBEDDING_BATCH_SIZE: int = 32
     DB_POOL_SIZE: int = 10
+    CACHE_TTL_MINUTES: int = 30  # ← Tambahkan ini
     
     class Config:
         env_file = ".env"
