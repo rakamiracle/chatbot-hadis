@@ -1,0 +1,39 @@
+{
+  "test_cases": [
+    {
+      "id": 1,
+      "query": "Apa itu wudhu?",
+      "expected_keywords": ["bersuci", "air", "anggota", "shalat"],
+      "expected_type": "definition",
+      "min_relevance": 0.7
+    },
+    {
+      "id": 2,
+      "query": "Siapa perawi hadis tentang shalat?",
+      "expected_keywords": ["perawi", "rawi"],
+      "expected_type": "perawi",
+      "min_relevance": 0.6
+    },
+    {
+      "id": 3,
+      "query": "Bagaimana cara berwudhu?",
+      "expected_keywords": ["cara", "langkah", "tertib"],
+      "expected_type": "howto",
+      "min_relevance": 0.7
+    },
+    {
+      "id": 4,
+      "query": "Apa hukum puasa Ramadhan?",
+      "expected_keywords": ["wajib", "fardu", "ramadhan"],
+      "expected_type": "definition",
+      "min_relevance": 0.7
+    },
+    {
+      "id": 5,
+      "query": "Berapa rakaat shalat maghrib?",
+      "expected_keywords": ["tiga", "3", "rakaat"],
+      "expected_type": "number",
+      "min_relevance": 0.8
+    }
+  ]
+}
