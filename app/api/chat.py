@@ -112,10 +112,9 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         log_query(sid, request.query, response_time)
         logger.info(f"✓ Response in {response_time:.0f}ms")
         
-        # Log analytics (fire and forget)
+        # Log analytics (fire and forget) - Don't pass db, let analytics create its own session
         asyncio.create_task(
-            analytics_service.log_query(
-                db=db,
+            log_analytics_async(
                 session_id=uuid.UUID(sid) if len(sid) == 36 else uuid.uuid4(),
                 query_text=request.query,
                 response_time_ms=response_time,
@@ -186,6 +185,36 @@ async def save_chat_history(session_id: str, query: str, answer: str):
             logger.info(f"✓ Chat history saved with embeddings")
     except Exception as e:
         logger.error(f"Error saving history: {e}")
+
+async def log_analytics_async(
+    session_id: uuid.UUID,
+    query_text: str,
+    response_time_ms: float,
+    embedding_time_ms: float = None,
+    search_time_ms: float = None,
+    llm_time_ms: float = None,
+    cache_hit: bool = False,
+    chunks_found: int = 0,
+    kitab_filter: str = None
+):
+    """Log analytics in background with its own session"""
+    try:
+        from app.database.connection import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            await analytics_service.log_query(
+                db=db,
+                session_id=session_id,
+                query_text=query_text,
+                response_time_ms=response_time_ms,
+                embedding_time_ms=embedding_time_ms,
+                search_time_ms=search_time_ms,
+                llm_time_ms=llm_time_ms,
+                cache_hit=cache_hit,
+                chunks_found=chunks_found,
+                kitab_filter=kitab_filter
+            )
+    except Exception as e:
+        logger.error(f"Error logging analytics: {e}")
 
 @router.post("/clear-cache")
 async def clear_cache():
