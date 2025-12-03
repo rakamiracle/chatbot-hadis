@@ -155,6 +155,29 @@ async def process_pdf_sync(pdf_path: str, doc_id: int, db: AsyncSession, filenam
         logger.info(f"[{doc_id}] Saving to database...")
         db.add_all(chunk_objects)
         
+        # Generate document-level embedding
+        logger.info(f"[{doc_id}] Generating document-level embedding...")
+        try:
+            # Create document summary from first 5 chunks (or all if less than 5)
+            summary_chunks = all_chunks[:min(5, len(all_chunks))]
+            summary_text = " ".join([chunk['text'] for chunk in summary_chunks])
+            
+            # Truncate to reasonable length (max ~512 tokens ≈ 2000 chars)
+            if len(summary_text) > 2000:
+                summary_text = summary_text[:2000]
+            
+            # Generate embedding for document summary
+            doc_embedding = await embed.generate_embedding(summary_text)
+            
+            # Update document with summary and embedding
+            doc.summary_text = summary_text
+            doc.embedding = doc_embedding
+            
+            logger.info(f"[{doc_id}] ✓ Document embedding generated")
+        except Exception as e:
+            logger.warning(f"[{doc_id}] Failed to generate document embedding: {e}")
+            # Continue even if document embedding fails
+        
         # Update status
         doc.status = DocumentStatus.COMPLETED
         await db.commit()

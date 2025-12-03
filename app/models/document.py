@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, Enum, Text
 from sqlalchemy.dialects.postgresql import JSONB
+from pgvector.sqlalchemy import Vector
 from sqlalchemy.orm import relationship
 from app.database.connection import Base
 from datetime import datetime
@@ -25,5 +26,9 @@ class HadisDocument(Base):
     penerbit = Column(String)
     tahun_terbit = Column(String)
     doc_metadata = Column(JSONB)  # Metadata tambahan
+    
+    # Document-level vector embedding
+    summary_text = Column(Text)  # Summary text used for embedding
+    embedding = Column(Vector(384))  # Document-level embedding vector
     
     chunks = relationship("HadisChunk", back_populates="document", cascade="all, delete-orphan")
