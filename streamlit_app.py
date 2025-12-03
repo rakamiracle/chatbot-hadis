@@ -75,7 +75,7 @@ st.title("💬 Chat dengan Hadis")
 st.caption("Tanyakan tentang hadis yang telah diupload")
 
 # Display chat messages
-for message in st.session_state.messages:
+for idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
         if message["role"] == "assistant" and "sources" in message:
@@ -84,6 +84,48 @@ for message in st.session_state.messages:
                     st.markdown(f"**Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
                     st.text(src['text'])
                     st.markdown("---")
+            
+            # Add feedback buttons
+            feedback_key = f"feedback_{idx}"
+            if feedback_key not in st.session_state:
+                st.session_state[feedback_key] = None
+            
+            col1, col2, col3 = st.columns([1, 1, 8])
+            with col1:
+                if st.button("👍", key=f"thumbs_up_{idx}", help="Jawaban membantu"):
+                    st.session_state[feedback_key] = "thumbs_up"
+                    # Send feedback to backend
+                    try:
+                        feedback_data = {
+                            "session_id": st.session_state.session_id,
+                            "query": message.get("query", ""),
+                            "response": message["content"],
+                            "feedback_type": "thumbs_up",
+                            "chunks_count": len(message.get("sources", []))
+                        }
+                        response = requests.post(f"{API_URL}/analytics/feedback", json=feedback_data)
+                        if response.status_code == 200:
+                            st.success("✓ Terima kasih atas feedback Anda!", icon="✅")
+                    except Exception as e:
+                        st.error(f"Gagal mengirim feedback: {e}")
+            
+            with col2:
+                if st.button("👎", key=f"thumbs_down_{idx}", help="Jawaban kurang membantu"):
+                    st.session_state[feedback_key] = "thumbs_down"
+                    # Send feedback to backend
+                    try:
+                        feedback_data = {
+                            "session_id": st.session_state.session_id,
+                            "query": message.get("query", ""),
+                            "response": message["content"],
+                            "feedback_type": "thumbs_down",
+                            "chunks_count": len(message.get("sources", []))
+                        }
+                        response = requests.post(f"{API_URL}/analytics/feedback", json=feedback_data)
+                        if response.status_code == 200:
+                            st.info("Terima kasih! Kami akan terus meningkatkan kualitas jawaban.", icon="ℹ️")
+                    except Exception as e:
+                        st.error(f"Gagal mengirim feedback: {e}")
 
 # ======================================
 # 🔥 INPUT BARU: Chat + Filter Kitab
@@ -117,7 +159,8 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                     st.session_state.messages.append({
                         "role": "assistant",
                         "content": answer,
-                        "sources": sources
+                        "sources": sources,
+                        "query": prompt  # Store query for feedback
                     })
                     
                     with st.expander("📚 Lihat Sumber"):
