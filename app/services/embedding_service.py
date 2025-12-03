@@ -3,12 +3,40 @@ from typing import List
 from config import settings
 import re
 import numpy as np
+import torch
 
 class EmbeddingService:
+    _instance = None  # Singleton pattern
+    
+    def __new__(cls):
+        """Singleton pattern untuk reuse model instance"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+    
     def __init__(self):
+        if self._initialized:
+            return
+            
         print(f"Loading embedding model: {settings.EMBEDDING_MODEL}")
-        self.model = SentenceTransformer(settings.EMBEDDING_MODEL)
-        print("✓ Model loaded")
+        
+        # OPTIMIZATION 1: Use GPU if available
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        print(f"Using device: {device}")
+        
+        self.model = SentenceTransformer(settings.EMBEDDING_MODEL, device=device)
+        
+        # OPTIMIZATION 2: Enable half precision on GPU for 2x speed
+        if device == "cuda":
+            self.model.half()
+            print("✓ Enabled FP16 for faster GPU inference")
+        
+        # OPTIMIZATION 3: Warmup model
+        _ = self.model.encode("warmup", convert_to_numpy=True)
+        
+        print("✓ Model loaded and warmed up")
+        self._initialized = True
     
     def _preprocess_text(self, text: str) -> str:
         """Preprocess text untuk embedding yang lebih baik"""

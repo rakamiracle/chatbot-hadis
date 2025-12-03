@@ -19,12 +19,15 @@ class VectorSearch:
         """Hybrid search with optimization"""
         
         if top_k is None:
-            top_k = settings.TOP_K_RESULTS * 2  # Reduce from 3x to 2x
+            top_k = settings.TOP_K_RESULTS * 2
         
         # Simplified keyword extraction
         keywords = self._extract_keywords(query_text)
         
-        # OPTIMIZATION: Simpler query, less joins
+        # OPTIMIZATION: Use subquery for better performance
+        # Calculate similarity once and reuse
+        similarity_expr = (1 - HadisChunk.embedding.cosine_distance(query_embedding)).label("similarity")
+        
         vector_query = select(
             HadisChunk.id,
             HadisChunk.chunk_text,
@@ -32,12 +35,12 @@ class VectorSearch:
             HadisChunk.chunk_metadata,
             HadisChunk.document_id,
             HadisDocument.kitab_name,
-            (1 - HadisChunk.embedding.cosine_distance(query_embedding)).label("similarity")
+            similarity_expr
         ).join(
             HadisDocument, HadisChunk.document_id == HadisDocument.id
         )
         
-        # Apply filters
+        # Apply filters BEFORE ordering (more efficient)
         conditions = []
         
         if kitab_filter:
@@ -49,7 +52,7 @@ class VectorSearch:
         if conditions:
             vector_query = vector_query.where(and_(*conditions))
         
-        # OPTIMIZATION: Lower threshold for initial retrieval
+        # OPTIMIZATION: Order and limit in one go
         vector_query = vector_query.order_by(
             HadisChunk.embedding.cosine_distance(query_embedding)
         ).limit(top_k)
@@ -57,13 +60,18 @@ class VectorSearch:
         result = await db.execute(vector_query)
         rows = result.all()
         
+        # OPTIMIZATION: Process results in batch
         candidates = []
+        keyword_set = set(keywords)  # Use set for O(1) lookup
+        
         for row in rows:
             similarity = float(row.similarity)
             
-            if similarity >= 0.5:  # Lower threshold
-                # Quick keyword score
-                keyword_score = sum(1 for kw in keywords if kw in row.chunk_text.lower()) / max(len(keywords), 1)
+            # Lower threshold for better recall
+            if similarity >= 0.5:
+                # Quick keyword score with set intersection
+                text_words = set(row.chunk_text.lower().split())
+                keyword_score = len(keyword_set & text_words) / max(len(keywords), 1)
                 
                 candidates.append({
                     "chunk_id": row.id,

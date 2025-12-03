@@ -6,25 +6,36 @@ from app.services.embedding_service import EmbeddingService
 from app.services.vector_search import VectorSearch
 from app.services.llm_service import LLMService
 from app.services.query_cache import query_cache
+from app.services.analytics_service import analytics_service
 from app.models.chat_history import ChatHistory
+from app.models.analytics import ErrorSeverity
 from app.utils.logger import logger, log_query
 from datetime import datetime
 import uuid
 import asyncio
+import time
 
 router = APIRouter()
 
 @router.post("/", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     start_time = datetime.utcnow()
+    start_time_ms = time.time() * 1000
+    
+    # Timing variables
+    embedding_time_ms = None
+    search_time_ms = None
+    llm_time_ms = None
+    cache_hit = False
     
     try:
         logger.info(f"Query: {request.query[:100]}")
         
-        # Initialize services
-        embed_service = EmbeddingService()
+        # OPTIMIZATION: Reuse singleton instances (no re-initialization)
+        embed_service = EmbeddingService()  # Singleton pattern
         search_service = VectorSearch()
         llm_service = LLMService()
+
         
         # OPTIMIZATION 1: Check full cache first
         cache_key_filters = {
@@ -37,6 +48,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         if cached_chunks:
             logger.info("✓ Full cache hit")
             chunks = cached_chunks
+            cache_hit = True
         else:
             # OPTIMIZATION 2: Check embedding cache
             qemb = query_cache.get_embedding(request.query)
@@ -45,11 +57,14 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 logger.info("✓ Embedding cache hit")
             else:
                 logger.info("Generating embedding...")
+                embed_start = time.time() * 1000
                 qemb = await embed_service.generate_embedding(request.query)
+                embedding_time_ms = time.time() * 1000 - embed_start
                 query_cache.set_embedding(request.query, qemb)
             
             # Search
             logger.info("Searching database...")
+            search_start = time.time() * 1000
             chunks = await search_service.search_similar(
                 qemb,
                 request.query,
@@ -57,6 +72,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 kitab_filter=request.kitab_filter,
                 document_ids=request.document_ids
             )
+            search_time_ms = time.time() * 1000 - search_start
             
             if chunks:
                 query_cache.set_results(request.query, chunks, cache_key_filters)
@@ -69,7 +85,9 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         
         # OPTIMIZATION 3: Generate response (already optimized in LLM service)
         logger.info("Generating answer...")
+        llm_start = time.time() * 1000
         answer = await llm_service.generate_response(request.query, chunks)
+        llm_time_ms = time.time() * 1000 - llm_start
         
         # Build sources
         sources = [
@@ -94,12 +112,43 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         log_query(sid, request.query, response_time)
         logger.info(f"✓ Response in {response_time:.0f}ms")
         
+        # Log analytics (fire and forget)
+        asyncio.create_task(
+            analytics_service.log_query(
+                db=db,
+                session_id=uuid.UUID(sid) if len(sid) == 36 else uuid.uuid4(),
+                query_text=request.query,
+                response_time_ms=response_time,
+                embedding_time_ms=embedding_time_ms,
+                search_time_ms=search_time_ms,
+                llm_time_ms=llm_time_ms,
+                cache_hit=cache_hit,
+                chunks_found=len(chunks),
+                kitab_filter=request.kitab_filter
+            )
+        )
+        
         return ChatResponse(answer=answer, sources=sources, session_id=sid)
     
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error: {str(e)}", exc_info=True)
+        
+        # Log error to analytics (fire and forget)
+        try:
+            asyncio.create_task(
+                analytics_service.log_error(
+                    db=db,
+                    error_type=type(e).__name__,
+                    error_message=str(e),
+                    endpoint="/api/chat",
+                    severity=ErrorSeverity.high
+                )
+            )
+        except:
+            pass  # Don't fail if analytics logging fails
+        
         raise HTTPException(500, f"Error: {str(e)}")
 
 async def save_chat_history(session_id: str, query: str, answer: str):

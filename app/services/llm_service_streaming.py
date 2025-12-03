@@ -1,11 +1,13 @@
 import ollama
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, AsyncGenerator
 from config import settings
 from app.utils.logger import logger
 import asyncio
 import re
 
-class LLMService:
+class LLMServiceStreaming:
+    """LLM Service dengan streaming untuk response yang lebih cepat terasa"""
+    
     def __init__(self):
         self.model = settings.OLLAMA_MODEL
         self.fallback_responses = {
@@ -14,50 +16,73 @@ class LLMService:
             "timeout": "Maaf, pemrosesan memakan waktu terlalu lama. Silakan coba dengan pertanyaan yang lebih spesifik."
         }
     
-    async def generate_response(self, query: str, context_chunks: List[Dict]) -> str:
-        """Generate response dengan optimized prompting"""
+    async def generate_response_stream(
+        self, 
+        query: str, 
+        context_chunks: List[Dict]
+    ) -> AsyncGenerator[str, None]:
+        """Generate response dengan streaming untuk perceived speed"""
         
         if not context_chunks:
             logger.warning(f"No context chunks for query: {query}")
-            return self.fallback_responses["no_context"]
+            yield self.fallback_responses["no_context"]
+            return
         
-        # Detect query type untuk custom prompt
+        # Detect query type
         query_type = self._detect_query_type(query)
         
-        # Build optimized context - REDUCED to 2 chunks max
+        # Build optimized context
         context = self._build_optimized_context(context_chunks, query_type)
         
         # Build optimized prompt
         prompt = self._build_prompt(query, context, query_type)
         
         try:
-            logger.info(f"Generating LLM response (type: {query_type})...")
+            logger.info(f"Generating streaming LLM response (type: {query_type})...")
             
-            # CRITICAL: Much shorter timeout to prevent 2-minute hangs
-            response = await asyncio.wait_for(
-                self._generate_with_ollama(prompt),
-                timeout=10.0  # REDUCED from 25s to 10s - fail fast!
-            )
+            # Stream response
+            async for chunk in self._stream_with_ollama(prompt):
+                yield chunk
             
-            if not response or len(response.strip()) < 10:
-                logger.warning("LLM returned empty/short response")
-                return self._generate_fallback_response(query, context_chunks)
-            
-            # Post-process response
-            response = self._post_process_response(response, context_chunks)
-            
-            logger.info("LLM response generated successfully")
-            return response.strip()
+            logger.info("Streaming response completed")
         
         except asyncio.TimeoutError:
-            logger.error(f"LLM timeout (10s) for query: {query}")
-            logger.warning("Using fallback response due to timeout")
-            # Return fallback instead of error message
-            return self._generate_fallback_response(query, context_chunks)
+            logger.error(f"LLM timeout for query: {query}")
+            yield self.fallback_responses["timeout"]
         
         except Exception as e:
             logger.error(f"LLM error: {str(e)}")
-            return self._generate_fallback_response(query, context_chunks, error=str(e))
+            yield self._generate_fallback_response(query, context_chunks, error=str(e))
+    
+    async def _stream_with_ollama(self, prompt: str) -> AsyncGenerator[str, None]:
+        """Stream response from Ollama"""
+        
+        # Run in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        
+        def _generate():
+            return ollama.generate(
+                model=self.model,
+                prompt=prompt,
+                stream=True,  # Enable streaming
+                options={
+                    "temperature": 0.1,
+                    "top_p": 0.8,
+                    "top_k": 20,
+                    "num_predict": 200,
+                    "stop": ["\n\n", "PERTANYAAN:", "KONTEKS:"],
+                    "num_ctx": 1024,
+                    "num_thread": 4,
+                }
+            )
+        
+        # Get streaming generator
+        stream = await loop.run_in_executor(None, _generate)
+        
+        # Yield chunks
+        for chunk in stream:
+            if 'response' in chunk:
+                yield chunk['response']
     
     def _detect_query_type(self, query: str) -> str:
         """Detect type of query untuk optimized prompting"""
@@ -79,8 +104,8 @@ class LLMService:
     def _build_optimized_context(self, chunks: List[Dict], query_type: str) -> str:
         """Build context yang lebih concise"""
         
-        # CRITICAL: Reduced to top 2 chunks (from 3) for faster LLM
-        top_chunks = sorted(chunks, key=lambda x: x.get('final_score', x['similarity']), reverse=True)[:2]
+        # Ambil top 3 chunks paling relevan
+        top_chunks = sorted(chunks, key=lambda x: x.get('final_score', x['similarity']), reverse=True)[:3]
         
         context_parts = []
         for i, chunk in enumerate(top_chunks, 1):
@@ -94,10 +119,10 @@ class LLMService:
                 header += f" #{meta['nomor_hadis']}"
             header += "]"
             
-            # CRITICAL: Reduced max length to 400 (from 600) for faster processing
+            # Relevant text only (trim jika terlalu panjang)
             text = chunk['text']
-            if len(text) > 400:
-                text = text[:400] + "..."
+            if len(text) > 600:
+                text = text[:600] + "..."
             
             context_parts.append(f"{header}\n{text}")
         
@@ -137,46 +162,6 @@ INSTRUKSI:
 JAWABAN:"""
         
         return prompt
-    
-    async def _generate_with_ollama(self, prompt: str) -> str:
-        """Generate response using Ollama with optimized settings"""
-        response = ollama.generate(
-            model=self.model,
-            prompt=prompt,
-            options={
-                "temperature": 0.1,      # Lower = faster & more deterministic
-                "top_p": 0.8,
-                "top_k": 20,             # Lower = faster
-                "num_predict": 100,      # DRASTICALLY REDUCED from 200 to 100
-                "stop": ["\n\n", "PERTANYAAN:", "KONTEKS:"],
-                "num_ctx": 512,          # REDUCED from 1024 to 512 for speed
-                "num_thread": 4,         # Use CPU threads
-            }
-        )
-        return response['response']
-    
-    def _post_process_response(self, response: str, chunks: List[Dict]) -> str:
-        """Post-process LLM response"""
-        
-        # Remove potential repetition
-        lines = response.split('\n')
-        unique_lines = []
-        seen = set()
-        
-        for line in lines:
-            line_clean = line.strip().lower()
-            if line_clean and line_clean not in seen:
-                unique_lines.append(line.strip())
-                seen.add(line_clean)
-        
-        response = ' '.join(unique_lines)
-        
-        # Ensure tidak terlalu panjang
-        if len(response) > 800:
-            sentences = re.split(r'[.!?]', response)
-            response = '. '.join(sentences[:4]) + '.'
-        
-        return response
     
     def _generate_fallback_response(self, query: str, chunks: List[Dict], error: Optional[str] = None) -> str:
         """Generate fallback response dari context chunks"""
