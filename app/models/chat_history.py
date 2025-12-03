@@ -1,5 +1,6 @@
 from sqlalchemy import Column, Integer, Text, DateTime
 from sqlalchemy.dialects.postgresql import JSONB, UUID
+from pgvector.sqlalchemy import Vector
 from app.database.connection import Base
 from datetime import datetime
 import uuid
@@ -12,3 +13,8 @@ class ChatHistory(Base):
     bot_response = Column(Text, nullable=False)
     sources = Column(JSONB)
     timestamp = Column(DateTime, default=datetime.utcnow)
+    
+    # Vector embeddings for semantic search
+    query_embedding = Column(Vector(384))  # Embedding for user query
+    response_embedding = Column(Vector(384))  # Embedding for bot response
+    combined_embedding = Column(Vector(384))  # Embedding for full conversation
