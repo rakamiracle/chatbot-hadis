@@ -78,13 +78,17 @@ st.caption("Tanyakan tentang hadis yang telah diupload")
 for idx, message in enumerate(st.session_state.messages):
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
-        if message["role"] == "assistant" and "sources" in message:
+        
+        # Show sources if available
+        if message["role"] == "assistant" and "sources" in message and len(message["sources"]) > 0:
             with st.expander("📚 Lihat Sumber"):
                 for i, src in enumerate(message["sources"], 1):
                     st.markdown(f"**Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
                     st.text(src['text'])
                     st.markdown("---")
-            
+        
+        # Show feedback buttons for all assistant messages
+        if message["role"] == "assistant":
             # Add feedback buttons
             feedback_key = f"feedback_{idx}"
             if feedback_key not in st.session_state:
@@ -105,9 +109,9 @@ for idx, message in enumerate(st.session_state.messages):
                         }
                         response = requests.post(f"{API_URL}/analytics/feedback", json=feedback_data)
                         if response.status_code == 200:
-                            st.success("✓ Terima kasih atas feedback Anda!", icon="✅")
+                            st.toast("✅ Terima kasih atas feedback Anda!", icon="✅")
                     except Exception as e:
-                        st.error(f"Gagal mengirim feedback: {e}")
+                        st.toast(f"❌ Gagal mengirim feedback: {e}", icon="❌")
             
             with col2:
                 if st.button("👎", key=f"thumbs_down_{idx}", help="Jawaban kurang membantu"):
@@ -123,9 +127,9 @@ for idx, message in enumerate(st.session_state.messages):
                         }
                         response = requests.post(f"{API_URL}/analytics/feedback", json=feedback_data)
                         if response.status_code == 200:
-                            st.info("Terima kasih! Kami akan terus meningkatkan kualitas jawaban.", icon="ℹ️")
+                            st.toast("📝 Terima kasih! Kami akan terus meningkatkan kualitas jawaban.", icon="ℹ️")
                     except Exception as e:
-                        st.error(f"Gagal mengirim feedback: {e}")
+                        st.toast(f"❌ Gagal mengirim feedback: {e}", icon="❌")
 
 # ======================================
 # 🔥 INPUT BARU: Chat + Filter Kitab
