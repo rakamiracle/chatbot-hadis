@@ -152,18 +152,38 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(500, f"Error: {str(e)}")
 
 async def save_chat_history(session_id: str, query: str, answer: str):
-    """Save chat history in background"""
+    """Save chat history in background with embeddings"""
     try:
         from app.database.connection import AsyncSessionLocal
+        
+        # Generate embeddings
+        embed_service = EmbeddingService()
+        
+        # Truncate texts if needed (max ~2000 chars)
+        query_text = query[:2000] if len(query) > 2000 else query
+        answer_text = answer[:2000] if len(answer) > 2000 else answer
+        combined_text = f"Q: {query_text} A: {answer_text}"
+        if len(combined_text) > 2000:
+            combined_text = combined_text[:2000]
+        
+        # Generate all three embeddings
+        query_embedding = await embed_service.generate_embedding(query_text)
+        response_embedding = await embed_service.generate_embedding(answer_text)
+        combined_embedding = await embed_service.generate_embedding(combined_text)
+        
         async with AsyncSessionLocal() as db:
             hist = ChatHistory(
                 session_id=uuid.UUID(session_id) if len(session_id) == 36 else uuid.uuid4(),
                 user_query=query,
                 bot_response=answer,
-                sources=[]
+                sources=[],
+                query_embedding=query_embedding,
+                response_embedding=response_embedding,
+                combined_embedding=combined_embedding
             )
             db.add(hist)
             await db.commit()
+            logger.info(f"✓ Chat history saved with embeddings")
     except Exception as e:
         logger.error(f"Error saving history: {e}")
 
