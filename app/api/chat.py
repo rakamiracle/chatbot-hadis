@@ -79,7 +79,16 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         
         if not chunks:
             logger.warning("No chunks found")
-            raise HTTPException(404, "Tidak ditemukan hadis relevan. Coba kata kunci lain.")
+            # Return friendly message instead of error
+            no_results_message = (
+                "Maaf, saya tidak menemukan hadis yang relevan dengan pertanyaan Anda. "
+                "Silakan coba dengan kata kunci yang berbeda atau lebih spesifik."
+            )
+            return ChatResponse(
+                answer=no_results_message,
+                sources=[],
+                session_id=request.session_id or str(uuid.uuid4())
+            )
         
         logger.info(f"Found {len(chunks)} chunks")
         
