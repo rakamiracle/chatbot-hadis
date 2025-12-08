@@ -99,10 +99,14 @@ async def diagnose():
                 
                 # Test vector search
                 if count > 0:
+                    # Create a 384-dimension test vector (matching paraphrase-multilingual-MiniLM-L12-v2)
+                    test_vector = [0.1] * 384
+                    test_vector_str = "[" + ",".join(map(str, test_vector)) + "]"
+                    
                     start = time.time()
-                    result = await conn.execute(text("""
+                    result = await conn.execute(text(f"""
                         SELECT id FROM hadis_chunks 
-                        ORDER BY embedding <=> '[0.1,0.2,0.3]'::vector 
+                        ORDER BY embedding <=> '{test_vector_str}'::vector 
                         LIMIT 5
                     """))
                     _ = result.fetchall()
