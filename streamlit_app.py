@@ -147,7 +147,7 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                     "session_id": st.session_state.session_id
                 }
                 
-                # Tambahkan filter jika ada
+                # Tambahkan filter jika adaS
                 if hasattr(st.session_state, 'kitab_filter') and st.session_state.kitab_filter:
                     payload["kitab_filter"] = st.session_state.kitab_filter
                 

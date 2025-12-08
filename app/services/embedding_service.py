@@ -47,11 +47,6 @@ class EmbeddingService:
         text = text.replace('ة', 'ه')
         return text.strip()
     
-    async def generate_embedding(self, text: str) -> List[float]:
-        """Generate embedding dengan preprocessing"""
-        processed_text = self._preprocess_text(text)
-        embedding = self.model.encode(processed_text, convert_to_numpy=True, normalize_embeddings=True)
-        return embedding.tolist()
     
     async def generate_embeddings_batch(self, texts: List[str], batch_size: int = 32) -> List[List[float]]:
         """Batch embedding generation - OPTIMIZED"""
