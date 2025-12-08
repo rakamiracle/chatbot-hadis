@@ -6,6 +6,7 @@ class ChatRequest(BaseModel):
     session_id: Optional[str] = None
     kitab_filter: Optional[str] = None  # Filter per kitab
     document_ids: Optional[List[int]] = None  # Filter per dokumen
+    force_arabic: Optional[bool] = None  # None=auto, True=force show, False=force hide
 
 class Source(BaseModel):
     chunk_id: int
@@ -14,6 +15,10 @@ class Source(BaseModel):
     similarity_score: float
     kitab_name: Optional[str] = None  # Tambah info kitab
     document_id: int
+
+    arabic_text: Optional[str] = None  # Teks Arab hadis
+    perawi: Optional[str] = None       # Perawi hadis
+    hadis_number: Optional[str] = None # Nomor hadis
 
 class ChatResponse(BaseModel):
     answer: str

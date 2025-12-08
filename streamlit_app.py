@@ -64,6 +64,22 @@ with st.sidebar:
     # 🔥 END CODE BARU
     # ==========================
 
+    # ==========================
+    # ⚙️ Pengaturan Tampilan
+    # ==========================
+    st.markdown("---")
+    st.subheader("⚙️ Pengaturan Tampilan")
+
+    # Toggle untuk force show/hide Arab
+    show_arabic = st.radio(
+        "Tampilan Teks Arab",
+        ["Auto (Deteksi Otomatis)", "Selalu Tampilkan", "Jangan Tampilkan"],
+        help="Atur kapan teks Arab ditampilkan"
+    )
+
+    st.session_state.arabic_display_mode = show_arabic
+    # ==========================
+
     st.markdown("---")
     if st.button("🗑️ Hapus Riwayat Chat", use_container_width=True):
         st.session_state.messages = []
@@ -81,10 +97,27 @@ for idx, message in enumerate(st.session_state.messages):
         
         # Show sources if available
         if message["role"] == "assistant" and "sources" in message and len(message["sources"]) > 0:
-            with st.expander("📚 Lihat Sumber"):
+            with st.expander("📚 Lihat Sumber Hadis"):
                 for i, src in enumerate(message["sources"], 1):
-                    st.markdown(f"**Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
+                    # Header sumber
+                    st.markdown(f"**📖 Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
+                    
+                    # ✨ TAMPILKAN ARAB JIKA ADA
+                    if src.get('arabic_text'):
+                        st.markdown("**🔤 Teks Arab:**")
+                        st.markdown(f"<div dir='rtl' style='font-size: 20px; line-height: 1.8; padding: 10px; background: #f0f0f0; border-radius: 5px;'>{src['arabic_text']}</div>", unsafe_allow_html=True)
+                        st.markdown("")  # Spacing
+                    
+                    # Terjemah/text
+                    st.markdown("**📝 Terjemah:**")
                     st.text(src['text'])
+                    
+                    # Info tambahan
+                    if src.get('perawi'):
+                        st.caption(f"👤 Perawi: {src['perawi']}")
+                    if src.get('hadis_number'):
+                        st.caption(f"🔢 Hadis #{src['hadis_number']}")
+                    
                     st.markdown("---")
         
         # Show feedback buttons for all assistant messages
@@ -147,9 +180,16 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                     "session_id": st.session_state.session_id
                 }
                 
-                # Tambahkan filter jika adaS
+                # Tambahkan filter jika ada
                 if hasattr(st.session_state, 'kitab_filter') and st.session_state.kitab_filter:
                     payload["kitab_filter"] = st.session_state.kitab_filter
+                
+                # Tambahkan mode Arabic display
+                if hasattr(st.session_state, 'arabic_display_mode'):
+                    if st.session_state.arabic_display_mode == "Selalu Tampilkan":
+                        payload["force_arabic"] = True
+                    elif st.session_state.arabic_display_mode == "Jangan Tampilkan":
+                        payload["force_arabic"] = False
                 
                 response = requests.post(f"{API_URL}/chat/", json=payload)
                 
@@ -167,10 +207,27 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                         "query": prompt  # Store query for feedback
                     })
                     
-                    with st.expander("📚 Lihat Sumber"):
+                    with st.expander("📚 Lihat Sumber Hadis"):
                         for i, src in enumerate(sources, 1):
-                            st.markdown(f"**Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
+                            # Header sumber
+                            st.markdown(f"**📖 Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
+                            
+                            # ✨ TAMPILKAN ARAB JIKA ADA
+                            if src.get('arabic_text'):
+                                st.markdown("**🔤 Teks Arab:**")
+                                st.markdown(f"<div dir='rtl' style='font-size: 20px; line-height: 1.8; padding: 10px; background: #f0f0f0; border-radius: 5px;'>{src['arabic_text']}</div>", unsafe_allow_html=True)
+                                st.markdown("")  # Spacing
+                            
+                            # Terjemah/text
+                            st.markdown("**📝 Terjemah:**")
                             st.text(src['text'])
+                            
+                            # Info tambahan
+                            if src.get('perawi'):
+                                st.caption(f"👤 Perawi: {src['perawi']}")
+                            if src.get('hadis_number'):
+                                st.caption(f"🔢 Hadis #{src['hadis_number']}")
+                            
                             st.markdown("---")
                 else:
                     err = f"Error {response.status_code}: {response.text}"

@@ -95,21 +95,34 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         # OPTIMIZATION 3: Generate response (already optimized in LLM service)
         logger.info("Generating answer...")
         llm_start = time.time() * 1000
-        answer = await llm_service.generate_response(request.query, chunks)
+        answer = await llm_service.generate_response(request.query, chunks, force_arabic=request.force_arabic)
         llm_time_ms = time.time() * 1000 - llm_start
         
-        # Build sources
-        sources = [
-            Source(
-                chunk_id=c['chunk_id'],
-                text=c['text'][:200],
-                page_number=c['page_number'],
-                similarity_score=c.get('final_score', c['similarity']),
-                kitab_name=c.get('kitab_name'),
-                document_id=c['document_id']
-            )
-            for c in chunks[:5]  # Limit sources
-        ]
+        # Build sources dengan Arab
+        sources = []
+        for c in chunks[:5]:
+            meta = c.get('metadata', {})
+            
+            source_data = {
+                "chunk_id": c['chunk_id'],
+                "text": c['text'][:200],
+                "page_number": c['page_number'],
+                "similarity_score": c.get('final_score', c['similarity']),
+                "kitab_name": c.get('kitab_name'),
+                "document_id": c['document_id']
+            }
+            
+            # ✨ Include Arab jika ada
+            if meta.get('arab'):
+                source_data['arabic_text'] = meta['arab']
+            
+            if meta.get('perawi'):
+                source_data['perawi'] = meta['perawi']
+            
+            if meta.get('nomor_hadis'):
+                source_data['hadis_number'] = meta['nomor_hadis']
+            
+            sources.append(Source(**source_data))
         
         # Save to history (don't await - fire and forget for speed)
         sid = request.session_id or str(uuid.uuid4())
