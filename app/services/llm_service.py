@@ -14,8 +14,12 @@ class LLMService:
             "timeout": "Maaf, pemrosesan memakan waktu terlalu lama. Silakan coba dengan pertanyaan yang lebih spesifik."
         }
     
-    async def generate_response(self, query: str, context_chunks: List[Dict]) -> str:
-        """Generate response dengan optimized prompting"""
+    async def generate_response(self, query: str, context_chunks: List[Dict], force_arabic: Optional[bool] = None) -> str:
+        """Generate response dengan optimized prompting
+        
+        Args:
+            force_arabic: None=auto detect, True=force show, False=force hide
+        """
         
         if not context_chunks:
             logger.warning(f"No context chunks for query: {query}")
@@ -27,8 +31,8 @@ class LLMService:
         # Build optimized context - REDUCED to 2 chunks max
         context = self._build_optimized_context(context_chunks, query_type)
         
-        # Build optimized prompt
-        prompt = self._build_prompt(query, context, query_type)
+        # Build optimized prompt with force_arabic setting
+        prompt = self._build_prompt(query, context, query_type, force_arabic)
         
         try:
             logger.info(f"Generating LLM response (type: {query_type})...")
@@ -103,36 +107,85 @@ class LLMService:
         
         return "\n\n".join(context_parts)
     
-    def _build_prompt(self, query: str, context: str, query_type: str) -> str:
-        """Build optimized prompt based on query type"""
+    def _detect_need_arabic(self, query: str) -> bool:
+        """Deteksi apakah perlu tampilkan teks Arab"""
+        query_lower = query.lower()
         
-        # Base instruction
+        # Keyword yang trigger tampilan Arab
+        arabic_triggers = [
+            'arab', 'arabnya', 'tulisan arab',
+            'lafadz', 'lafal', 'lafadh', 'lafalnya',
+            'bacaan', 'dibaca', 'membaca',
+            'teks asli', 'naskah asli',
+            'full hadis', 'hadis lengkap', 'lengkap',
+            'bunyi', 'bunyinya',
+            'doa', 'dzikir', 'zikir',  # Hafalan biasanya perlu Arab
+        ]
+        
+        # Cek apakah ada trigger keyword
+        for trigger in arabic_triggers:
+            if trigger in query_lower:
+                return True
+        
+        # Deteksi query spesifik (nomor hadis)
+        if any(word in query_lower for word in ['nomor', 'no.', 'no ', 'hadis nomor']):
+            return True
+        
+        return False
+
+    def _build_prompt(self, query: str, context: str, query_type: str, force_arabic: Optional[bool] = None) -> str:
+        """Build prompt dengan instruksi tampil Arab atau tidak
+        
+        Args:
+            force_arabic: None=auto detect, True=force show, False=force hide
+        """
+        
+        # Tentukan apakah perlu Arab
+        if force_arabic is True:
+            include_arabic = True
+        elif force_arabic is False:
+            include_arabic = False
+        else:
+            # Auto detect dari query
+            include_arabic = self._detect_need_arabic(query)
+        
         base_instruction = "Anda adalah asisten ahli hadis Islam. Jawab berdasarkan konteks hadis yang diberikan."
         
-        # Type-specific instruction
-        type_instructions = {
-            'perawi': "Fokus pada informasi perawi hadis.",
-            'definition': "Berikan definisi yang jelas dan ringkas.",
-            'howto': "Jelaskan langkah-langkahnya secara berurutan.",
-            'reason': "Jelaskan alasan atau hikmahnya.",
-            'number': "Sebutkan nomor atau angka yang spesifik.",
-            'general': "Berikan jawaban yang komprehensif."
-        }
+        # Instruksi berbeda tergantung perlu Arab atau tidak
+        if include_arabic:
+            format_instruction = """
+FORMAT JAWABAN DENGAN ARAB:
+1. Tulis teks Arab dari hadis (gunakan ❖ Arab: [teks])
+2. Tulis terjemah Indonesia
+3. Sebutkan perawi dan referensi
+4. Berikan penjelasan singkat jika relevan
+
+Contoh format:
+❖ Arab:
+[Tulis teks arab dari konteks]
+
+❖ Terjemah:
+[Terjemah hadis]
+
+❖ Sumber: HR. Bukhari #123
+"""
+        else:
+            format_instruction = """
+INSTRUKSI:
+- Jawab dalam 2-4 kalimat yang padat dan informatif
+- Sebut perawi/kitab/nomor jika relevan
+- JANGAN tampilkan teks Arab kecuali diminta
+- Fokus pada penjelasan/jawaban pertanyaan
+"""
         
-        instruction = type_instructions.get(query_type, type_instructions['general'])
-        
-        prompt = f"""{base_instruction} {instruction}
+        prompt = f"""{base_instruction}
 
 KONTEKS HADIS:
 {context}
 
 PERTANYAAN: {query}
 
-INSTRUKSI:
-- Jawab dalam 2-4 kalimat yang padat dan informatif
-- Sebut perawi/kitab/nomor jika relevan
-- Jika konteks tidak cukup, katakan dengan jujur
-- Hindari pengulangan informasi
+{format_instruction}
 
 JAWABAN:"""
         

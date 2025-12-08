@@ -14,9 +14,9 @@ from datetime import datetime
 # 🔧 CONFIG - SESUAIKAN DENGAN DATABASE MYSQL KATING
 # ===================================
 MYSQL_CONFIG = {
-    "host": "localhost",  # Atau IP server MySQL Kating
+    "host": "localhost",  # Atau IP server MySQL 
     "user": "root",       # Username MySQL
-    "password": "root12345678",       # Password MySQL (kosongkan jika tidak ada)
+    "password": "root12345678",       # Password MySQL 
     "database": "hadis_kating",  # Nama database di MySQL
     "charset": "utf8mb4"
 }

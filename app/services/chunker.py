@@ -116,4 +116,15 @@ class HadisChunker:
         if match:
             metadata['kitab'] = match.group(0)
         
+        # ✨ Ekstrak teks Arab
+        # Deteksi Arab: karakter Unicode range Arab
+        arabic_pattern = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+'
+        arabic_matches = re.findall(arabic_pattern, text)
+        
+        if arabic_matches:
+            # Ambil teks Arab terpanjang (biasanya itu hadis utama)
+            longest_arabic = max(arabic_matches, key=len)
+            if len(longest_arabic) > 20:  # Minimal 20 karakter
+                metadata['arab'] = longest_arabic
+        
         return metadata
