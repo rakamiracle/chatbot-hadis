@@ -22,11 +22,17 @@ MYSQL_CONFIG = {
 }
 
 TABLES_TO_IMPORT = [
-    {
-        "name": "musnad_ahmad",
-        "kitab_name": "Musnad Ahmad"
-    }
-    # Tambahkan tabel lain jika ada
+    # {"name": "musnad_ahmad", "kitab_name": "Musnad Ahmad"},
+    # {"name": "musnad_darimi", "kitab_name": "Musnad Darimi"},
+    {"name": "musnad_syafii", "kitab_name": "Musnad Syafi'i"}, 
+    # {"name": "muwatho_malik", "kitab_name": "Muwatho Malik"},
+    # {"name": "riyadhus_shalihin", "kitab_name": "Riyadhus Shalihin"},
+    {"name": "shahih_bukhari", "kitab_name": "Shahih Bukhari"}, 
+    {"name": "shahih_muslim", "kitab_name": "Shahih Muslim"}, 
+    {"name": "sunan_abu_daud", "kitab_name": "Sunan Abu Daud"}, 
+    {"name": "sunan_ibnu_majah", "kitab_name": "Sunan Ibnu Majah"}, 
+    {"name": "sunan_nasai", "kitab_name": "Sunan Nasai"},
+    {"name": "sunan_tirmidzi", "kitab_name": "Sunan Tirmidzi"},
 ]
 # ===================================
 

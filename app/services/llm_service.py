@@ -14,28 +14,40 @@ class LLMService:
             "timeout": "Maaf, pemrosesan memakan waktu terlalu lama. Silakan coba dengan pertanyaan yang lebih spesifik."
         }
     
-    async def generate_response(self, query: str, context_chunks: List[Dict], force_arabic: Optional[bool] = None) -> str:
+    async def generate_response(self, query: str, context_chunks: List[Dict], force_arabic: Optional[bool] = None) -> tuple:
         """Generate response dengan optimized prompting
         
         Args:
             force_arabic: None=auto detect, True=force show, False=force hide
+            
+        Returns:
+            tuple: (answer: str, include_arabic: bool)
         """
         
         if not context_chunks:
             logger.warning(f"No context chunks for query: {query}")
-            return self.fallback_responses["no_context"]
+            return self.fallback_responses["no_context"], False
         
         # Detect query type untuk custom prompt
         query_type = self._detect_query_type(query)
         
+        # Tentukan apakah perlu Arab
+        if force_arabic is True:
+            include_arabic = True
+        elif force_arabic is False:
+            include_arabic = False
+        else:
+            # Auto detect berdasarkan query dan type
+            include_arabic = self._detect_need_arabic(query, query_type)
+        
         # Build optimized context - REDUCED to 2 chunks max
         context = self._build_optimized_context(context_chunks, query_type)
         
-        # Build optimized prompt with force_arabic setting
-        prompt = self._build_prompt(query, context, query_type, force_arabic)
+        # Build optimized prompt with include_arabic setting
+        prompt = self._build_prompt(query, context, query_type, include_arabic)
         
         try:
-            logger.info(f"Generating LLM response (type: {query_type})...")
+            logger.info(f"Generating LLM response (type: {query_type}, arabic: {include_arabic})...")
             
             # CRITICAL: Much shorter timeout to prevent 2-minute hangs
             response = await asyncio.wait_for(
@@ -45,23 +57,23 @@ class LLMService:
             
             if not response or len(response.strip()) < 10:
                 logger.warning("LLM returned empty/short response")
-                return self._generate_fallback_response(query, context_chunks)
+                return self._generate_fallback_response(query, context_chunks), include_arabic
             
             # Post-process response
             response = self._post_process_response(response, context_chunks)
             
             logger.info("LLM response generated successfully")
-            return response.strip()
+            return response.strip(), include_arabic
         
         except asyncio.TimeoutError:
             logger.error(f"LLM timeout (10s) for query: {query}")
             logger.warning("Using fallback response due to timeout")
             # Return fallback instead of error message
-            return self._generate_fallback_response(query, context_chunks)
+            return self._generate_fallback_response(query, context_chunks), include_arabic
         
         except Exception as e:
             logger.error(f"LLM error: {str(e)}")
-            return self._generate_fallback_response(query, context_chunks, error=str(e))
+            return self._generate_fallback_response(query, context_chunks, error=str(e)), include_arabic
     
     def _detect_query_type(self, query: str) -> str:
         """Detect type of query untuk optimized prompting"""
@@ -107,75 +119,90 @@ class LLMService:
         
         return "\n\n".join(context_parts)
     
-    def _detect_need_arabic(self, query: str) -> bool:
-        """Deteksi apakah perlu tampilkan teks Arab"""
+    def _detect_need_arabic(self, query: str, query_type: str) -> bool:
+        """Deteksi apakah perlu tampilkan teks Arab berdasarkan query dan type
+        
+        Logic:
+        - Explicit Arabic keywords → Always show
+        - Hafalan context (doa, bacaan) → Show
+        - Specific reference (nomor hadis) → Show
+        - Definition/howto/reason questions → Hide by default
+        """
         query_lower = query.lower()
         
-        # Keyword yang trigger tampilan Arab
-        arabic_triggers = [
-            'arab', 'arabnya', 'tulisan arab',
+        # Query types yang TIDAK perlu Arab (default hide)
+        no_arabic_types = ['definition', 'howto', 'reason', 'perawi']
+        
+        # Explicit Arabic triggers - override query type
+        explicit_arabic = [
+            'arab', 'arabnya', 'tulisan arab', 'bahasa arab',
             'lafadz', 'lafal', 'lafadh', 'lafalnya',
-            'bacaan', 'dibaca', 'membaca',
-            'teks asli', 'naskah asli',
-            'full hadis', 'hadis lengkap', 'lengkap',
-            'bunyi', 'bunyinya',
-            'doa', 'dzikir', 'zikir',  # Hafalan biasanya perlu Arab
+            'bunyi', 'bunyinya', 'berbunyi',
+            'teks asli', 'naskah asli', 'aslinya',
+            'full hadis', 'hadis lengkap', 'lengkap', 'selengkapnya',
         ]
         
-        # Cek apakah ada trigger keyword
-        for trigger in arabic_triggers:
+        # Cek explicit trigger dulu - highest priority
+        for trigger in explicit_arabic:
             if trigger in query_lower:
                 return True
         
-        # Deteksi query spesifik (nomor hadis)
-        if any(word in query_lower for word in ['nomor', 'no.', 'no ', 'hadis nomor']):
+        # Hafalan context - perlu Arab untuk dibaca/dihafalkan
+        hafalan_context = ['bacaan', 'dibaca', 'membaca', 'doa', 'dzikir', 'zikir', 'wirid', 'shalawat']
+        for word in hafalan_context:
+            if word in query_lower:
+                return True
+        
+        # Specific reference - perlu Arab untuk referensi lengkap
+        if any(word in query_lower for word in ['nomor', 'no.', 'hadis ke', 'hadits ke', 'hadis no']):
             return True
         
+        # Query type based - hide Arab untuk definisi/cara/alasan
+        if query_type in no_arabic_types:
+            return False
+        
+        # Default: tidak tampilkan Arab (concise response)
         return False
 
-    def _build_prompt(self, query: str, context: str, query_type: str, force_arabic: Optional[bool] = None) -> str:
+    def _build_prompt(self, query: str, context: str, query_type: str, include_arabic: bool) -> str:
         """Build prompt dengan instruksi tampil Arab atau tidak
         
         Args:
-            force_arabic: None=auto detect, True=force show, False=force hide
+            include_arabic: Whether to include Arabic in response
         """
         
-        # Tentukan apakah perlu Arab
-        if force_arabic is True:
-            include_arabic = True
-        elif force_arabic is False:
-            include_arabic = False
-        else:
-            # Auto detect dari query
-            include_arabic = self._detect_need_arabic(query)
+        # Type-specific base instruction
+        type_instructions = {
+            'definition': "Berikan definisi yang jelas dan ringkas.",
+            'howto': "Jelaskan langkah-langkah secara berurutan.",
+            'reason': "Jelaskan alasan atau hikmahnya.",
+            'perawi': "Fokus pada informasi tentang perawi.",
+            'number': "Sebutkan referensi yang spesifik.",
+            'general': "Berikan jawaban yang informatif."
+        }
         
-        base_instruction = "Anda adalah asisten ahli hadis Islam. Jawab berdasarkan konteks hadis yang diberikan."
+        base_instruction = f"Anda adalah asisten ahli hadis Islam. {type_instructions.get(query_type, type_instructions['general'])}"
         
         # Instruksi berbeda tergantung perlu Arab atau tidak
         if include_arabic:
             format_instruction = """
-FORMAT JAWABAN DENGAN ARAB:
-1. Tulis teks Arab dari hadis (gunakan ❖ Arab: [teks])
-2. Tulis terjemah Indonesia
-3. Sebutkan perawi dan referensi
-4. Berikan penjelasan singkat jika relevan
+FORMAT JAWABAN (WAJIB LENGKAP):
+1. 📖 Arab: [tulis teks Arab dari konteks]
+2. 📝 Terjemah: [terjemahan lengkap dalam Bahasa Indonesia]
+3. 📚 Sumber: [sebutkan perawi, kitab, nomor hadis]
+4. ✨ Penjelasan: [berikan penjelasan 2-3 kalimat tentang makna/konteks hadis]
 
-Contoh format:
-❖ Arab:
-[Tulis teks arab dari konteks]
-
-❖ Terjemah:
-[Terjemah hadis]
-
-❖ Sumber: HR. Bukhari #123
+SEMUA 4 BAGIAN DI ATAS WAJIB DIISI. Jangan hanya tulis Arab saja.
 """
         else:
             format_instruction = """
-INSTRUKSI:
-- Jawab dalam 2-4 kalimat yang padat dan informatif
-- Sebut perawi/kitab/nomor jika relevan
-- JANGAN tampilkan teks Arab kecuali diminta
-- Fokus pada penjelasan/jawaban pertanyaan
+INSTRUKSI PENTING:
+- Jawab dalam 2-4 kalimat yang padat dan informatif dalam Bahasa Indonesia
+- Sebut sumber (perawi/kitab/nomor) jika relevan
+- DILARANG KERAS menulis teks Arab atau transliterasi Arab
+- DILARANG menulis huruf Arab seperti محمد atau lafaz seperti 'shallallahu alaihi wa sallam'
+- Fokus menjawab pertanyaan dengan penjelasan yang jelas
+- Gunakan HANYA Bahasa Indonesia
 """
         
         prompt = f"""{base_instruction}
@@ -200,9 +227,9 @@ JAWABAN:"""
                 "temperature": 0.1,      # Lower = faster & more deterministic
                 "top_p": 0.8,
                 "top_k": 20,             # Lower = faster
-                "num_predict": 100,      # DRASTICALLY REDUCED from 200 to 100
-                "stop": ["\n\n", "PERTANYAAN:", "KONTEKS:"],
-                "num_ctx": 512,          # REDUCED from 1024 to 512 for speed
+                "num_predict": 300,      # Increased for complete responses with Arabic
+                "stop": ["PERTANYAAN:", "KONTEKS:"],  # Removed \n\n to allow multi-paragraph
+                "num_ctx": 1024,         # Increased for better context understanding
                 "num_thread": 4,         # Use CPU threads
             }
         )

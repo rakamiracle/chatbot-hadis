@@ -97,26 +97,37 @@ for idx, message in enumerate(st.session_state.messages):
         
         # Show sources if available
         if message["role"] == "assistant" and "sources" in message and len(message["sources"]) > 0:
+            # Get include_arabic flag (default False for old messages)
+            show_arabic_default = message.get("include_arabic", False)
+            
             with st.expander("📚 Lihat Sumber Hadis"):
                 for i, src in enumerate(message["sources"], 1):
                     # Header sumber
                     st.markdown(f"**📖 Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
                     
-                    # ✨ TAMPILKAN ARAB JIKA ADA
-                    if src.get('arabic_text'):
-                        st.markdown("**🔤 Teks Arab:**")
-                        st.markdown(f"<div dir='rtl' style='font-size: 20px; line-height: 1.8; padding: 10px; background: #f0f0f0; border-radius: 5px;'>{src['arabic_text']}</div>", unsafe_allow_html=True)
-                        st.markdown("")  # Spacing
+                    # Check if text contains Arabic characters
+                    import re
+                    text = src['text']
+                    has_arabic_in_text = bool(re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', text))
                     
-                    # Terjemah/text
-                    st.markdown("**📝 Terjemah:**")
-                    st.text(src['text'])
+                    # Show Arabic text (from metadata or from text if text is Arabic)
+                    arabic_text = src.get('arabic_text') or (text if has_arabic_in_text else None)
+                    if arabic_text:
+                        with st.expander("🔤 Lihat Teks Arab", expanded=show_arabic_default):
+                            st.markdown(f"<div dir='rtl' style='font-size: 20px; line-height: 1.8; padding: 10px; background: #f5f5f5; border-radius: 8px; border: 1px solid #ddd;'>{arabic_text}</div>", unsafe_allow_html=True)
+                    
+                    # Show translation/text (only if not primarily Arabic)
+                    if not has_arabic_in_text:
+                        st.markdown("**📝 Teks:**")
+                        st.text(text)
                     
                     # Info tambahan
                     if src.get('perawi'):
                         st.caption(f"👤 Perawi: {src['perawi']}")
                     if src.get('hadis_number'):
                         st.caption(f"🔢 Hadis #{src['hadis_number']}")
+                    if src.get('kitab_name'):
+                        st.caption(f"📚 Kitab: {src['kitab_name']}")
                     
                     st.markdown("---")
         
@@ -197,6 +208,7 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                     data = response.json()
                     answer = data["answer"]
                     sources = data["sources"]
+                    include_arabic = data.get("include_arabic", False)  # Get flag dari backend
                     
                     st.markdown(answer)
 
@@ -204,6 +216,7 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                         "role": "assistant",
                         "content": answer,
                         "sources": sources,
+                        "include_arabic": include_arabic,  # Store flag
                         "query": prompt  # Store query for feedback
                     })
                     
@@ -212,21 +225,29 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                             # Header sumber
                             st.markdown(f"**📖 Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
                             
-                            # ✨ TAMPILKAN ARAB JIKA ADA
-                            if src.get('arabic_text'):
-                                st.markdown("**🔤 Teks Arab:**")
-                                st.markdown(f"<div dir='rtl' style='font-size: 20px; line-height: 1.8; padding: 10px; background: #f0f0f0; border-radius: 5px;'>{src['arabic_text']}</div>", unsafe_allow_html=True)
-                                st.markdown("")  # Spacing
+                            # Check if text contains Arabic characters
+                            import re
+                            text = src['text']
+                            has_arabic_in_text = bool(re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', text))
                             
-                            # Terjemah/text
-                            st.markdown("**📝 Terjemah:**")
-                            st.text(src['text'])
+                            # Show Arabic text (from metadata or from text if text is Arabic)
+                            arabic_text = src.get('arabic_text') or (text if has_arabic_in_text else None)
+                            if arabic_text:
+                                with st.expander("🔤 Lihat Teks Arab", expanded=include_arabic):
+                                    st.markdown(f"<div dir='rtl' style='font-size: 20px; line-height: 1.8; padding: 10px; background: #f5f5f5; border-radius: 8px; border: 1px solid #ddd;'>{arabic_text}</div>", unsafe_allow_html=True)
+                            
+                            # Show translation/text (only if not primarily Arabic)
+                            if not has_arabic_in_text:
+                                st.markdown("**📝 Teks:**")
+                                st.text(text)
                             
                             # Info tambahan
                             if src.get('perawi'):
                                 st.caption(f"👤 Perawi: {src['perawi']}")
                             if src.get('hadis_number'):
                                 st.caption(f"🔢 Hadis #{src['hadis_number']}")
+                            if src.get('kitab_name'):
+                                st.caption(f"📚 Kitab: {src['kitab_name']}")
                             
                             st.markdown("---")
                 else:

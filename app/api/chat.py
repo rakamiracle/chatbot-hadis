@@ -95,7 +95,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         # OPTIMIZATION 3: Generate response (already optimized in LLM service)
         logger.info("Generating answer...")
         llm_start = time.time() * 1000
-        answer = await llm_service.generate_response(request.query, chunks, force_arabic=request.force_arabic)
+        answer, include_arabic = await llm_service.generate_response(request.query, chunks, force_arabic=request.force_arabic)
         llm_time_ms = time.time() * 1000 - llm_start
         
         # Build sources dengan Arab
@@ -149,7 +149,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             )
         )
         
-        return ChatResponse(answer=answer, sources=sources, session_id=sid)
+        return ChatResponse(answer=answer, sources=sources, session_id=sid, include_arabic=include_arabic)
     
     except HTTPException:
         raise
