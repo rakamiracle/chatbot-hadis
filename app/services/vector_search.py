@@ -18,13 +18,13 @@ class VectorSearch:
     ) -> List[Dict]:
         """Hybrid search with optimization"""
         
+        # 🔥 FIX: Langsung fetch 5 chunks (tidak perlu 10 lalu buang 5)
         if top_k is None:
-            top_k = settings.TOP_K_RESULTS * 2
+            top_k = settings.TOP_K_RESULTS  # ← CHANGED: dari TOP_K_RESULTS * 2
         
         # Simplified keyword extraction
         keywords = self._extract_keywords(query_text)
         
-        # OPTIMIZATION: Use subquery for better performance
         # Calculate similarity once and reuse
         similarity_expr = (1 - HadisChunk.embedding.cosine_distance(query_embedding)).label("similarity")
         
@@ -52,7 +52,7 @@ class VectorSearch:
         if conditions:
             vector_query = vector_query.where(and_(*conditions))
         
-        # OPTIMIZATION: Order and limit in one go
+        # Order and limit in one go
         vector_query = vector_query.order_by(
             HadisChunk.embedding.cosine_distance(query_embedding)
         ).limit(top_k)
@@ -60,7 +60,7 @@ class VectorSearch:
         result = await db.execute(vector_query)
         rows = result.all()
         
-        # OPTIMIZATION: Process results in batch
+        # Process results in batch
         candidates = []
         keyword_set = set(keywords)  # Use set for O(1) lookup
         
@@ -87,7 +87,7 @@ class VectorSearch:
         # Quick re-rank
         ranked = self._quick_rerank(candidates)
         
-        return ranked[:settings.TOP_K_RESULTS]
+        return ranked[:settings.TOP_K_RESULTS]  # ← Return exactly TOP_K
     
     def _extract_keywords(self, query: str) -> List[str]:
         """Extract important keywords dari query"""
