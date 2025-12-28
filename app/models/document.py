@@ -29,6 +29,6 @@ class HadisDocument(Base):
     
     # Document-level vector embedding
     summary_text = Column(Text)  # Summary text used for embedding
-    embedding = Column(Vector(384))  # Document-level embedding vector
+    embedding = Column(Vector(512))  # Document-level embedding vector (updated to 512)
     
     chunks = relationship("HadisChunk", back_populates="document", cascade="all, delete-orphan")

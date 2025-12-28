@@ -15,6 +15,6 @@ class ChatHistory(Base):
     timestamp = Column(DateTime, default=datetime.utcnow)
     
     # Vector embeddings for semantic search
-    query_embedding = Column(Vector(384))  # Embedding for user query
-    response_embedding = Column(Vector(384))  # Embedding for bot response
-    combined_embedding = Column(Vector(384))  # Embedding for full conversation
+    query_embedding = Column(Vector(512))  # Embedding for user query
+    response_embedding = Column(Vector(512))  # Embedding for bot response
+    combined_embedding = Column(Vector(512))  # Embedding for full conversation

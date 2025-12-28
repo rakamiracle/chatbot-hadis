@@ -67,8 +67,8 @@ class VectorSearch:
         for row in rows:
             similarity = float(row.similarity)
             
-            # Lower threshold for better recall
-            if similarity >= 0.5:
+            # 🔥 LOWERED threshold after model change (distiluse-512 has different score distribution)
+            if similarity >= 0.3:
                 # Quick keyword score with set intersection
                 text_words = set(row.chunk_text.lower().split())
                 keyword_score = len(keyword_set & text_words) / max(len(keywords), 1)

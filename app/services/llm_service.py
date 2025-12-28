@@ -176,7 +176,7 @@ class LLMService:
         return False
 
     def _build_prompt(self, query: str, context: str, query_type: str, include_arabic: bool) -> str:
-        """Build prompt dengan instruksi tampil Arab atau tidak"""
+        """Build prompt dengan instruksi tampil Arab atau tidak + anti-hallucination rules"""
         
         # Type-specific base instruction
         type_instructions = {
@@ -216,12 +216,25 @@ CONTOH JAWABAN YANG BENAR:
 Wudhu wajib dilakukan sebelum shalat dan mencakup mencuci anggota tubuh tertentu dengan tertib."
 """
         
-        prompt = f"""{base_instruction}
+        prompt = f"""{base_instruction} {type_instructions.get(query_type, type_instructions['general'])}
 
 KONTEKS HADIS:
 {context}
 
 PERTANYAAN: {query}
+
+⚠️ ATURAN KETAT (WAJIB DIPATUHI):
+1. HANYA jawab jika konteks BENAR-BENAR relevan dengan pertanyaan
+2. Jika konteks tidak cocok, katakan: "Maaf, tidak ada hadis yang relevan dalam database untuk menjawab ini."
+3. JANGAN mengarang nomor hadis atau perawi yang tidak ada di konteks
+4. JANGAN menafsirkan hukum dari hadis yang tidak relevan
+5. Jika ada keraguan tentang relevansi, arahkan user untuk konsultasi ulama
+
+JAWABAN HARUS:
+- Jujur jika tidak tahu atau konteks tidak relevan
+- Sebut sumber PERSIS dari konteks (jika yakin relevan)
+- Singkat (2-4 kalimat)
+- Tidak menambahkan informasi di luar konteks yang diberikan
 
 {format_instruction}
 

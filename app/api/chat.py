@@ -7,6 +7,7 @@ from app.services.vector_search import VectorSearch
 from app.services.llm_service import LLMService
 from app.services.query_cache import query_cache
 from app.services.analytics_service import analytics_service
+from app.services.query_validator import query_validator
 from app.models.chat_history import ChatHistory
 from app.models.analytics import ErrorSeverity
 from app.utils.logger import logger, log_query
@@ -30,6 +31,12 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     
     try:
         logger.info(f"Query: {request.query[:100]}")
+        
+        # 🔥 SAFETY CHECK: Validate query for sensitive topics
+        validation_result = query_validator.validate_query(request.query)
+        
+        if not validation_result['is_valid']:
+            raise HTTPException(400, validation_result.get('error', 'Invalid query'))
         
         # OPTIMIZATION: Reuse singleton instances (no re-initialization)
         embed_service = EmbeddingService()  # Singleton pattern
@@ -98,6 +105,13 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         answer, include_arabic = await llm_service.generate_response(request.query, chunks, force_arabic=request.force_arabic)
         llm_time_ms = time.time() * 1000 - llm_start
         
+        # 🔥 APPEND DISCLAIMER if sensitive topic detected
+        if validation_result['is_sensitive']:
+            disclaimer = validation_result['disclaimer']
+            if disclaimer:
+                answer = answer + disclaimer
+                logger.info(f"Added disclaimer for sensitive topic (severity: {validation_result['severity']})")
+        
         # Build sources dengan Arab
         sources = []
         for c in chunks[:5]:
@@ -154,7 +168,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error: {str(e)}", exc_info=True)
+        logger.error("Error in chat endpoint: {}", str(e), exc_info=True)
         
         # Log error to analytics (fire and forget)
         try:
