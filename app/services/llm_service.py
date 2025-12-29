@@ -49,10 +49,9 @@ class LLMService:
         try:
             logger.info(f"Generating LLM response (type: {query_type}, arabic: {include_arabic})...")
             
-            # 🔥 FIX 1: Timeout dinaikkan 10s → 30s
             response = await asyncio.wait_for(
                 self._generate_with_ollama(prompt),
-                timeout=30.0  # ← CHANGED from 10.0
+                timeout=30.0
             )
             
             if not response or len(response.strip()) < 10:
@@ -65,7 +64,6 @@ class LLMService:
             logger.info("LLM response generated successfully")
             return response.strip(), include_arabic
         
-        # 🔥 FIX 2: Better error messages
         except asyncio.TimeoutError:
             logger.error(f"LLM timeout (30s) for query: {query}")
             fallback_msg = (
@@ -176,7 +174,7 @@ class LLMService:
         return False
 
     def _build_prompt(self, query: str, context: str, query_type: str, include_arabic: bool) -> str:
-        """Build prompt dengan instruksi tampil Arab atau tidak + anti-hallucination rules"""
+        """Build prompt dengan instruksi WAJIB include metadata"""
         
         # Type-specific base instruction
         type_instructions = {
@@ -196,27 +194,28 @@ class LLMService:
 FORMAT JAWABAN (WAJIB LENGKAP):
 1. 📖 Arab: [tulis teks Arab dari konteks]
 2. 📝 Terjemah: [terjemahan lengkap dalam Bahasa Indonesia]
-3. 📚 Sumber: [sebutkan perawi, kitab, nomor hadis]
+3. 📚 Sumber LENGKAP: [WAJIB format: Kitab [Nama Kitab], Bab [Nama Bab], Hadis No. [Nomor], Perawi: [Nama Perawi]]
+   Contoh: "Shahih Bukhari, Bab Iman, Hadis No. 52, Perawi: Abu Hurairah"
 4. ✨ Penjelasan: [berikan penjelasan 2-3 kalimat tentang makna/konteks hadis]
 
-SEMUA 4 BAGIAN DI ATAS WAJIB DIISI. Jangan hanya tulis Arab saja.
+CRITICAL: Sumber harus LENGKAP dengan Kitab, Bab, dan Nomor Hadis!
 """
         else:
-            # 🔥 FIX: Tambahkan instruksi CITATION
             format_instruction = """
 INSTRUKSI PENTING:
 - Jawab dalam 2-4 kalimat yang informatif dalam Bahasa Indonesia
-- 🔥 WAJIB: Sertakan sumber dalam jawaban dengan format (HR. Nama, #nomor)
-  Contoh: "...bersuci dengan air (HR. Bukhari #135)"
+- 🔥 WAJIB: Sertakan sumber LENGKAP dalam jawaban dengan format:
+  (Kitab [Nama], Bab [Nama], Hadis No. [Nomor], HR. [Perawi])
+  Contoh: "...bersuci dengan air (Shahih Bukhari, Bab Wudhu, Hadis No. 135, HR. Bukhari)"
 - DILARANG menulis teks Arab atau huruf Arab
 - Fokus menjawab pertanyaan dengan penjelasan yang jelas
 
 CONTOH JAWABAN YANG BENAR:
-"Wudhu adalah bersuci menggunakan air untuk menghilangkan hadats kecil (HR. Bukhari #159). 
+"Wudhu adalah bersuci menggunakan air untuk menghilangkan hadats kecil (Shahih Bukhari, Bab Wudhu, Hadis No. 159, HR. Bukhari). 
 Wudhu wajib dilakukan sebelum shalat dan mencakup mencuci anggota tubuh tertentu dengan tertib."
 """
         
-        prompt = f"""{base_instruction} {type_instructions.get(query_type, type_instructions['general'])}
+        prompt = f"""{base_instruction}
 
 KONTEKS HADIS:
 {context}
@@ -227,12 +226,12 @@ PERTANYAAN: {query}
 1. HANYA jawab jika konteks BENAR-BENAR relevan dengan pertanyaan
 2. Jika konteks tidak cocok, katakan: "Maaf, tidak ada hadis yang relevan dalam database untuk menjawab ini."
 3. JANGAN mengarang nomor hadis atau perawi yang tidak ada di konteks
-4. JANGAN menafsirkan hukum dari hadis yang tidak relevan
+4. WAJIB mencantumkan Kitab, Bab, Nomor Hadis, dan Perawi dalam jawaban
 5. Jika ada keraguan tentang relevansi, arahkan user untuk konsultasi ulama
 
 JAWABAN HARUS:
 - Jujur jika tidak tahu atau konteks tidak relevan
-- Sebut sumber PERSIS dari konteks (jika yakin relevan)
+- Sebut sumber PERSIS dari konteks dengan LENGKAP (Kitab + Bab + No. Hadis + Perawi)
 - Singkat (2-4 kalimat)
 - Tidak menambahkan informasi di luar konteks yang diberikan
 
@@ -248,13 +247,13 @@ JAWABAN:"""
             model=self.model,
             prompt=prompt,
             options={
-                "temperature": 0.1,      # Lower = faster & more deterministic
+                "temperature": 0.1,
                 "top_p": 0.8,
-                "top_k": 20,             # Lower = faster
-                "num_predict": 300,      # Increased for complete responses with Arabic
-                "stop": ["PERTANYAAN:", "KONTEKS:"],  # Removed \n\n to allow multi-paragraph
-                "num_ctx": 1024,         # Increased for better context understanding
-                "num_thread": 4,         # Use CPU threads
+                "top_k": 20,
+                "num_predict": 300,
+                "stop": ["PERTANYAAN:", "KONTEKS:"],
+                "num_ctx": 1024,
+                "num_thread": 4,
             }
         )
         return response['response']
@@ -273,12 +272,12 @@ JAWABAN:"""
                 unique_lines.append(line.strip())
                 seen.add(line_clean)
         
-        response = ' '.join(unique_lines)
+        response = '\n'.join(unique_lines)
         
         # Ensure tidak terlalu panjang
         if len(response) > 800:
             sentences = re.split(r'[.!?]', response)
-            response = '. '.join(sentences[:4]) + '.'
+            response = '. '.join(sentences[:6]) + '.'
         
         return response
     

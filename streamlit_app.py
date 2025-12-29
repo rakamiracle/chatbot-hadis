@@ -96,38 +96,60 @@ for idx, message in enumerate(st.session_state.messages):
         st.markdown(message["content"])
         
         # Show sources if available
+        # Show sources if available
         if message["role"] == "assistant" and "sources" in message and len(message["sources"]) > 0:
-            # Get include_arabic flag (default False for old messages)
+            # Get include_arabic flag
             show_arabic_default = message.get("include_arabic", False)
             
             with st.expander("📚 Lihat Sumber Hadis"):
                 for i, src in enumerate(message["sources"], 1):
-                    # Header sumber
-                    st.markdown(f"**📖 Sumber {i}** (Halaman {src['page_number']}, Similarity: {src['similarity_score']:.2f})")
+                    # 🔥 Header dengan metadata LENGKAP
+                    header_parts = [f"**📖 Sumber {i}**"]
                     
-                    # Check if text contains Arabic characters
+                    # Kitab (prioritas: metadata > document name)
+                    kitab = src.get('kitab_metadata') or src.get('kitab_name')
+                    if kitab:
+                        header_parts.append(f"Kitab: {kitab}")
+                    
+                    # Bab
+                    if src.get('bab'):
+                        bab_text = f"Bab"
+                        if src.get('bab_nomor'):
+                            bab_text += f" {src['bab_nomor']}"
+                        bab_text += f": {src['bab']}"
+                        header_parts.append(bab_text)
+                    
+                    # Nomor Hadis
+                    if src.get('hadis_number'):
+                        header_parts.append(f"Hadis No. {src['hadis_number']}")
+                    
+                    # Perawi
+                    if src.get('perawi'):
+                        header_parts.append(f"HR. {src['perawi']}")
+                    
+                    # Derajat
+                    if src.get('derajat'):
+                        header_parts.append(f"({src['derajat']})")
+                    
+                    # Similarity & Page
+                    header_parts.append(f"Hal. {src['page_number']}, Sim: {src['similarity_score']:.2f}")
+                    
+                    st.markdown(" | ".join(header_parts))
+                    
+                    # Arab text (jika ada)
                     import re
                     text = src['text']
                     has_arabic_in_text = bool(re.search(r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF]', text))
                     
-                    # Show Arabic text (from metadata or from text if text is Arabic)
                     arabic_text = src.get('arabic_text') or (text if has_arabic_in_text else None)
                     if arabic_text:
                         with st.expander("🔤 Lihat Teks Arab", expanded=show_arabic_default):
                             st.markdown(f"<div dir='rtl' style='font-size: 20px; line-height: 1.8; padding: 10px; background: #f5f5f5; border-radius: 8px; border: 1px solid #ddd;'>{arabic_text}</div>", unsafe_allow_html=True)
                     
-                    # Show translation/text (only if not primarily Arabic)
+                    # Translation/text
                     if not has_arabic_in_text:
                         st.markdown("**📝 Teks:**")
                         st.text(text)
-                    
-                    # Info tambahan
-                    if src.get('perawi'):
-                        st.caption(f"👤 Perawi: {src['perawi']}")
-                    if src.get('hadis_number'):
-                        st.caption(f"🔢 Hadis #{src['hadis_number']}")
-                    if src.get('kitab_name'):
-                        st.caption(f"📚 Kitab: {src['kitab_name']}")
                     
                     st.markdown("---")
         

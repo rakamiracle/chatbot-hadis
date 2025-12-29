@@ -113,6 +113,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 logger.info(f"Added disclaimer for sensitive topic (severity: {validation_result['severity']})")
         
         # Build sources dengan Arab
+        # Build sources dengan metadata LENGKAP
         sources = []
         for c in chunks[:5]:
             meta = c.get('metadata', {})
@@ -122,7 +123,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 "text": c['text'][:200],
                 "page_number": c['page_number'],
                 "similarity_score": c.get('final_score', c['similarity']),
-                "kitab_name": c.get('kitab_name'),
+                "kitab_name": c.get('kitab_name'),  # Dari document
                 "document_id": c['document_id']
             }
             
@@ -135,6 +136,19 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             
             if meta.get('nomor_hadis'):
                 source_data['hadis_number'] = meta['nomor_hadis']
+            
+            # 🔥 TAMBAHAN BARU: Bab dan Kitab dari metadata
+            if meta.get('bab'):
+                source_data['bab'] = meta['bab']
+            
+            if meta.get('bab_nomor'):
+                source_data['bab_nomor'] = meta['bab_nomor']
+            
+            if meta.get('kitab'):
+                source_data['kitab_metadata'] = meta['kitab']
+            
+            if meta.get('derajat'):
+                source_data['derajat'] = meta['derajat']
             
             sources.append(Source(**source_data))
         
