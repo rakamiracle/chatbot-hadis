@@ -8,6 +8,7 @@ from app.services.llm_service import LLMService
 from app.services.query_cache import query_cache
 from app.services.analytics_service import analytics_service
 from app.services.query_validator import query_validator
+from app.services.query_expander import query_expander  # 🔥 NEW
 from app.models.chat_history import ChatHistory
 from app.models.analytics import ErrorSeverity
 from app.utils.logger import logger, log_query
@@ -30,7 +31,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     cache_hit = False
     
     try:
-        logger.info(f"Query: {request.query[:100]}")
+        logger.info(f"📝 Query: {request.query[:100]}")
         
         # 🔥 SAFETY CHECK: Validate query for sensitive topics
         validation_result = query_validator.validate_query(request.query)
@@ -38,9 +39,13 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         if not validation_result['is_valid']:
             raise HTTPException(400, validation_result.get('error', 'Invalid query'))
         
-        # OPTIMIZATION: Reuse singleton instances (no re-initialization)
-        embed_service = EmbeddingService()  # Singleton pattern
-        search_service = VectorSearch()
+        # 🔥 NEW: Query Expansion
+        expansion = query_expander.expand_query(request.query)
+        logger.debug(f"📊 Query Expansion: {expansion}")
+        
+        # OPTIMIZATION: Reuse singleton instances
+        embed_service = EmbeddingService()
+        search_service = VectorSearch(threshold_mode='normal')  # 🔥 IMPROVED
         llm_service = LLMService()
 
         
@@ -53,7 +58,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         cached_chunks = query_cache.get_results(request.query, cache_key_filters)
         
         if cached_chunks:
-            logger.info("✓ Full cache hit")
+            logger.info("✅ Full cache hit")
             chunks = cached_chunks
             cache_hit = True
         else:
@@ -61,18 +66,20 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             qemb = query_cache.get_embedding(request.query)
             
             if qemb:
-                logger.info("✓ Embedding cache hit")
+                logger.info("✅ Embedding cache hit")
             else:
-                logger.info("Generating embedding...")
+                logger.info("🔄 Generating embedding...")
                 embed_start = time.time() * 1000
                 qemb = await embed_service.generate_embedding(request.query)
                 embedding_time_ms = time.time() * 1000 - embed_start
                 query_cache.set_embedding(request.query, qemb)
             
-            # Search
-            logger.info("Searching database...")
+            # Search with improved vector search
+            logger.info("🔍 Searching database...")
             search_start = time.time() * 1000
-            chunks = await search_service.search_similar(
+            
+            # 🔥 NEW: Use improved search with fallback
+            chunks = await search_service.search_with_fallback(
                 qemb,
                 request.query,
                 db,
@@ -85,24 +92,35 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 query_cache.set_results(request.query, chunks, cache_key_filters)
         
         if not chunks:
-            logger.warning("No chunks found")
-            # Return friendly message instead of error
+            logger.warning(f"⚠️  No chunks found for: '{request.query}'")
+            
+            # 🔥 IMPROVED: Better fallback message dengan suggestions
             no_results_message = (
                 "Maaf, saya tidak menemukan hadis yang relevan dengan pertanyaan Anda. "
-                "Silakan coba dengan kata kunci yang berbeda atau lebih spesifik."
+                "Silakan coba dengan kata kunci yang berbeda atau lebih spesifik.\n\n"
             )
+            
+            # Add suggestions
+            suggestions = query_expander.get_fallback_suggestions(request.query)
+            if suggestions:
+                no_results_message += "**Coba pertanyaan ini:**\n"
+                for i, suggestion in enumerate(suggestions, 1):
+                    no_results_message += f"{i}. {suggestion}\n"
+            
             return ChatResponse(
                 answer=no_results_message,
                 sources=[],
                 session_id=request.session_id or str(uuid.uuid4())
             )
         
-        logger.info(f"Found {len(chunks)} chunks")
+        logger.info(f"✅ Found {len(chunks)} chunks")
         
-        # OPTIMIZATION 3: Generate response (already optimized in LLM service)
-        logger.info("Generating answer...")
+        # OPTIMIZATION 3: Generate response
+        logger.info("🤖 Generating answer...")
         llm_start = time.time() * 1000
-        answer, include_arabic = await llm_service.generate_response(request.query, chunks, force_arabic=request.force_arabic)
+        answer, include_arabic = await llm_service.generate_response(
+            request.query, chunks, force_arabic=request.force_arabic
+        )
         llm_time_ms = time.time() * 1000 - llm_start
         
         # 🔥 APPEND DISCLAIMER if sensitive topic detected
@@ -110,9 +128,8 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             disclaimer = validation_result['disclaimer']
             if disclaimer:
                 answer = answer + disclaimer
-                logger.info(f"Added disclaimer for sensitive topic (severity: {validation_result['severity']})")
+                logger.info(f"⚠️  Added disclaimer (severity: {validation_result['severity']})")
         
-        # Build sources dengan Arab
         # Build sources dengan metadata LENGKAP
         sources = []
         for c in chunks[:5]:
@@ -123,7 +140,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 "text": c['text'][:200],
                 "page_number": c['page_number'],
                 "similarity_score": c.get('final_score', c['similarity']),
-                "kitab_name": c.get('kitab_name'),  # Dari document
+                "kitab_name": c.get('kitab_name'),
                 "document_id": c['document_id']
             }
             
@@ -137,7 +154,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             if meta.get('nomor_hadis'):
                 source_data['hadis_number'] = meta['nomor_hadis']
             
-            # 🔥 TAMBAHAN BARU: Bab dan Kitab dari metadata
+            # 🔥 Bab dan Kitab dari metadata
             if meta.get('bab'):
                 source_data['bab'] = meta['bab']
             
@@ -152,7 +169,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             
             sources.append(Source(**source_data))
         
-        # Save to history (don't await - fire and forget for speed)
+        # Save to history (fire and forget)
         sid = request.session_id or str(uuid.uuid4())
         asyncio.create_task(
             save_chat_history(sid, request.query, answer)
@@ -160,9 +177,9 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         
         response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
         log_query(sid, request.query, response_time)
-        logger.info(f"✓ Response in {response_time:.0f}ms")
+        logger.info(f"✅ Response in {response_time:.0f}ms | Chunks: {len(chunks)} | Similarity: {chunks[0].get('final_score', 0):.3f}")
         
-        # Log analytics (fire and forget) - Don't pass db, let analytics create its own session
+        # Log analytics (fire and forget)
         asyncio.create_task(
             log_analytics_async(
                 session_id=uuid.UUID(sid) if len(sid) == 36 else uuid.uuid4(),
@@ -182,7 +199,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Error in chat endpoint: {}", str(e), exc_info=True)
+        logger.error("❌ Error in chat endpoint: {}", str(e), exc_info=True)
         
         # Log error to analytics (fire and forget)
         try:
@@ -196,7 +213,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 )
             )
         except:
-            pass  # Don't fail if analytics logging fails
+            pass
         
         raise HTTPException(500, f"Error: {str(e)}")
 
@@ -205,17 +222,16 @@ async def save_chat_history(session_id: str, query: str, answer: str):
     try:
         from app.database.connection import AsyncSessionLocal
         
-        # Generate embeddings
         embed_service = EmbeddingService()
         
-        # Truncate texts if needed (max ~2000 chars)
+        # Truncate texts if needed
         query_text = query[:2000] if len(query) > 2000 else query
         answer_text = answer[:2000] if len(answer) > 2000 else answer
         combined_text = f"Q: {query_text} A: {answer_text}"
         if len(combined_text) > 2000:
             combined_text = combined_text[:2000]
         
-        # Generate all three embeddings
+        # Generate embeddings
         query_embedding = await embed_service.generate_embedding(query_text)
         response_embedding = await embed_service.generate_embedding(answer_text)
         combined_embedding = await embed_service.generate_embedding(combined_text)
@@ -232,7 +248,7 @@ async def save_chat_history(session_id: str, query: str, answer: str):
             )
             db.add(hist)
             await db.commit()
-            logger.info(f"✓ Chat history saved with embeddings")
+            logger.info(f"✅ Chat history saved")
     except Exception as e:
         logger.error(f"Error saving history: {e}")
 
@@ -247,7 +263,7 @@ async def log_analytics_async(
     chunks_found: int = 0,
     kitab_filter: str = None
 ):
-    """Log analytics in background with its own session"""
+    """Log analytics in background"""
     try:
         from app.database.connection import AsyncSessionLocal
         async with AsyncSessionLocal() as db:
