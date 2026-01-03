@@ -16,22 +16,29 @@ class Settings(BaseSettings):
     # Search & Retrieval
     TOP_K_RESULTS: int = 5
     
-    # 🔥 NEW: Vector Search Configuration
-    VECTOR_SEARCH_MODE: str = 'normal'  # 'strict', 'normal', 'lenient', 'debug'
-    VECTOR_SEARCH_THRESHOLD: float = 0.40  # Default threshold (can be overridden by mode)
-    ENABLE_FALLBACK_SEARCH: bool = True  # Enable automatic fallback to lenient threshold
-    FALLBACK_THRESHOLD: float = 0.20  # Fallback threshold if initial search returns < 3 results
-    MIN_RESULTS_FOR_FALLBACK: int = 3  # Trigger fallback if fewer than this many results
+    # 🔥 Vector Search Configuration
+    VECTOR_SEARCH_MODE: str = 'normal'
+    VECTOR_SEARCH_THRESHOLD: float = 0.40
+    ENABLE_FALLBACK_SEARCH: bool = True
+    FALLBACK_THRESHOLD: float = 0.20
+    MIN_RESULTS_FOR_FALLBACK: int = 3
     
-    # 🔥 NEW: Query Expansion Configuration
-    ENABLE_QUERY_EXPANSION: bool = True  # Enable query expansion for generic queries
-    EXPAND_WITH_RELATED_CONCEPTS: bool = True  # Add related concepts to search
-    GENERATE_FALLBACK_SUGGESTIONS: bool = True  # Generate suggestions if no results
+    # 🔥 Query Expansion Configuration
+    ENABLE_QUERY_EXPANSION: bool = True
+    EXPAND_WITH_RELATED_CONCEPTS: bool = True
+    GENERATE_FALLBACK_SUGGESTIONS: bool = True
     
-    # 🔥 NEW: LLM Configuration
-    LLM_TIMEOUT_SECONDS: int = 30  # Timeout for LLM generation
-    LLM_MAX_TOKENS: int = 300  # Maximum tokens in response
-    LLM_TEMPERATURE: float = 0.1  # Temperature (lower = more deterministic)
+    # 🔥 LLM Configuration (IMPROVED v2)
+    LLM_TIMEOUT_SECONDS: int = 45  # INCREASED: 30 → 45
+    LLM_MAX_TOKENS: int = 300  # INCREASED: 200 → 300
+    LLM_TEMPERATURE: float = 0.15  # INCREASED: 0.05 → 0.15 (lebih berani generate)
+    LLM_TOP_P: float = 0.7  # INCREASED: 0.6 → 0.7
+    LLM_TOP_K: int = 20  # INCREASED: 10 → 20
+    
+    # 🔥 LLM Validation Configuration
+    LLM_MIN_CONFIDENCE: float = 0.5  # REDUCED: 0.6 → 0.5 (less strict)
+    LLM_MIN_ANSWER_LENGTH: int = 20  # Minimum words required
+    LLM_MAX_ANSWER_LENGTH: int = 1500  # INCREASED: 800 → 1500
     
     # Performance Settings
     BATCH_SIZE: int = 50
@@ -39,16 +46,20 @@ class Settings(BaseSettings):
     DB_POOL_SIZE: int = 10
     CACHE_TTL_MINUTES: int = 30
     
-    # 🔥 NEW: Logging & Monitoring
-    DETAILED_LOGGING: bool = True  # Log detailed search info
-    LOG_SIMILARITY_SCORES: bool = True  # Log similarity scores
-    LOG_METADATA_QUALITY: bool = True  # Log metadata quality scores
+    # 🔥 Logging & Monitoring
+    DETAILED_LOGGING: bool = True
+    LOG_SIMILARITY_SCORES: bool = True
+    LOG_METADATA_QUALITY: bool = True
     
-    # 🔥 NEW: Feature Flags
-    ENABLE_ARABIC_DETECTION: bool = True  # Auto-detect Arabic text in chunks
-    ENABLE_METADATA_EXTRACTION: bool = True  # Extract and display full metadata
-    ENABLE_SOURCE_RANKING: bool = True  # Rank sources by quality
-    ENFORCE_SOURCE_VALIDATION: bool = True  # Validate source citations in answers
+    # 🔥 Feature Flags
+    ENABLE_ARABIC_DETECTION: bool = True
+    ENABLE_METADATA_EXTRACTION: bool = True
+    ENABLE_SOURCE_RANKING: bool = True
+    ENFORCE_SOURCE_VALIDATION: bool = True
+    
+    # 🔥 NEW: Disclaimer Configuration
+    SHOW_DISCLAIMER_ONLY_LOW_CONFIDENCE: bool = True  # Show disclaimer hanya jika confidence < 0.5
+    DISCLAIMER_MIN_CONFIDENCE_THRESHOLD: float = 0.5  # Threshold untuk show disclaimer
     
     class Config:
         env_file = ".env"

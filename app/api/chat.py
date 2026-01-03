@@ -8,7 +8,7 @@ from app.services.llm_service import LLMService
 from app.services.query_cache import query_cache
 from app.services.analytics_service import analytics_service
 from app.services.query_validator import query_validator
-from app.services.query_expander import query_expander  # 🔥 NEW
+from app.services.query_expander import query_expander
 from app.models.chat_history import ChatHistory
 from app.models.analytics import ErrorSeverity
 from app.utils.logger import logger, log_query
@@ -21,6 +21,9 @@ router = APIRouter()
 
 @router.post("/", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
+    """
+    🔥 IMPROVED V3: Fix untuk text field kosong & metadata lengkap
+    """
     start_time = datetime.utcnow()
     start_time_ms = time.time() * 1000
     
@@ -33,23 +36,22 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     try:
         logger.info(f"📝 Query: {request.query[:100]}")
         
-        # 🔥 SAFETY CHECK: Validate query for sensitive topics
+        # Safety check
         validation_result = query_validator.validate_query(request.query)
         
         if not validation_result['is_valid']:
             raise HTTPException(400, validation_result.get('error', 'Invalid query'))
         
-        # 🔥 NEW: Query Expansion
+        # Query expansion
         expansion = query_expander.expand_query(request.query)
         logger.debug(f"📊 Query Expansion: {expansion}")
         
-        # OPTIMIZATION: Reuse singleton instances
+        # Initialize services
         embed_service = EmbeddingService()
-        search_service = VectorSearch(threshold_mode='normal')  # 🔥 IMPROVED
+        search_service = VectorSearch(threshold_mode='normal')
         llm_service = LLMService()
 
-        
-        # OPTIMIZATION 1: Check full cache first
+        # Cache check
         cache_key_filters = {
             'kitab': request.kitab_filter,
             'docs': request.document_ids
@@ -62,7 +64,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             chunks = cached_chunks
             cache_hit = True
         else:
-            # OPTIMIZATION 2: Check embedding cache
+            # Embedding
             qemb = query_cache.get_embedding(request.query)
             
             if qemb:
@@ -74,11 +76,10 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 embedding_time_ms = time.time() * 1000 - embed_start
                 query_cache.set_embedding(request.query, qemb)
             
-            # Search with improved vector search
+            # Vector search
             logger.info("🔍 Searching database...")
             search_start = time.time() * 1000
             
-            # 🔥 NEW: Use improved search with fallback
             chunks = await search_service.search_with_fallback(
                 qemb,
                 request.query,
@@ -94,13 +95,11 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         if not chunks:
             logger.warning(f"⚠️  No chunks found for: '{request.query}'")
             
-            # 🔥 IMPROVED: Better fallback message dengan suggestions
             no_results_message = (
                 "Maaf, saya tidak menemukan hadis yang relevan dengan pertanyaan Anda. "
                 "Silakan coba dengan kata kunci yang berbeda atau lebih spesifik.\n\n"
             )
             
-            # Add suggestions
             suggestions = query_expander.get_fallback_suggestions(request.query)
             if suggestions:
                 no_results_message += "**Coba pertanyaan ini:**\n"
@@ -115,7 +114,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         
         logger.info(f"✅ Found {len(chunks)} chunks")
         
-        # OPTIMIZATION 3: Generate response
+        # Generate response
         logger.info("🤖 Generating answer...")
         llm_start = time.time() * 1000
         answer, include_arabic = await llm_service.generate_response(
@@ -123,53 +122,65 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         )
         llm_time_ms = time.time() * 1000 - llm_start
         
-        # 🔥 APPEND DISCLAIMER if sensitive topic detected
+        # Add disclaimer if needed
         if validation_result['is_sensitive']:
             disclaimer = validation_result['disclaimer']
             if disclaimer:
                 answer = answer + disclaimer
                 logger.info(f"⚠️  Added disclaimer (severity: {validation_result['severity']})")
         
-        # Build sources dengan metadata LENGKAP
+        # 🔥 FIXED V3: Build sources dengan TEXT field lengkap
         sources = []
         for c in chunks[:5]:
             meta = c.get('metadata', {})
             
+            # 🔥 PENTING: Pastikan text field ada!
+            text_content = c.get('text', '')
+            if not text_content:
+                logger.warning(f"⚠️  Chunk {c.get('chunk_id')} has empty text, using fallback")
+                text_content = c.get('chunk_text', '')[:200]  # Fallback
+            
             source_data = {
                 "chunk_id": c['chunk_id'],
-                "text": c['text'][:200],
+                "text": text_content[:300],  # 🔥 Pastikan ada
                 "page_number": c['page_number'],
-                "similarity_score": c.get('final_score', c['similarity']),
-                "kitab_name": c.get('kitab_name'),
+                "similarity_score": c.get('final_score', c.get('similarity', 0)),
+                "kitab_name": c.get('kitab_name', ''),
                 "document_id": c['document_id']
             }
             
-            # ✨ Include Arab jika ada
+            # 🔥 FIXED: Mapping metadata fields properly
             if meta.get('arab'):
                 source_data['arabic_text'] = meta['arab']
             
-            if meta.get('perawi'):
-                source_data['perawi'] = meta['perawi']
+            # 🔥 FIXED: Extract perawi properly
+            perawi = meta.get('perawi')
+            if perawi:
+                source_data['perawi'] = perawi
             
-            if meta.get('nomor_hadis'):
-                source_data['hadis_number'] = meta['nomor_hadis']
+            # 🔥 FIXED: Extract hadis_number properly
+            hadis_num = meta.get('nomor_hadis') or meta.get('hadis_id')
+            if hadis_num:
+                source_data['hadis_number'] = str(hadis_num)
             
-            # 🔥 Bab dan Kitab dari metadata
+            # Bab info
             if meta.get('bab'):
                 source_data['bab'] = meta['bab']
             
             if meta.get('bab_nomor'):
                 source_data['bab_nomor'] = meta['bab_nomor']
             
+            # Kitab metadata
             if meta.get('kitab'):
                 source_data['kitab_metadata'] = meta['kitab']
             
+            # Derajat
             if meta.get('derajat'):
                 source_data['derajat'] = meta['derajat']
             
             sources.append(Source(**source_data))
         
-        # Save to history (fire and forget)
+        # Save chat history (async)
         sid = request.session_id or str(uuid.uuid4())
         asyncio.create_task(
             save_chat_history(sid, request.query, answer)
@@ -177,9 +188,9 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         
         response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
         log_query(sid, request.query, response_time)
-        logger.info(f"✅ Response in {response_time:.0f}ms | Chunks: {len(chunks)} | Similarity: {chunks[0].get('final_score', 0):.3f}")
+        logger.info(f"✅ Response in {response_time:.0f}ms | Chunks: {len(chunks)} | Similarity: {chunks[0].get('final_score', chunks[0].get('similarity', 0)):.3f}")
         
-        # Log analytics (fire and forget)
+        # Log analytics (async)
         asyncio.create_task(
             log_analytics_async(
                 session_id=uuid.UUID(sid) if len(sid) == 36 else uuid.uuid4(),
@@ -201,7 +212,6 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     except Exception as e:
         logger.error("❌ Error in chat endpoint: {}", str(e), exc_info=True)
         
-        # Log error to analytics (fire and forget)
         try:
             asyncio.create_task(
                 analytics_service.log_error(
@@ -218,20 +228,18 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         raise HTTPException(500, f"Error: {str(e)}")
 
 async def save_chat_history(session_id: str, query: str, answer: str):
-    """Save chat history in background with embeddings"""
+    """Save chat history in background"""
     try:
         from app.database.connection import AsyncSessionLocal
         
         embed_service = EmbeddingService()
         
-        # Truncate texts if needed
         query_text = query[:2000] if len(query) > 2000 else query
         answer_text = answer[:2000] if len(answer) > 2000 else answer
         combined_text = f"Q: {query_text} A: {answer_text}"
         if len(combined_text) > 2000:
             combined_text = combined_text[:2000]
         
-        # Generate embeddings
         query_embedding = await embed_service.generate_embedding(query_text)
         response_embedding = await embed_service.generate_embedding(answer_text)
         combined_embedding = await embed_service.generate_embedding(combined_text)
