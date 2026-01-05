@@ -2,18 +2,20 @@ import ollama
 from typing import List, Dict, Optional
 from config import settings
 from app.utils.logger import logger
+from app.services.fatwa_guard import fatwa_guard  # 🔥 IMPORT FATWA GUARD
 import asyncio
 import re
 
 class LLMService:
     """
-    🔥 IMPROVED V3: Better fallback handling & metadata awareness
+    🔥 IMPROVED V4: Dengan FatwaGuard untuk mencegah jawaban halal/haram yang ngawur
     
-    Perubahan V3:
-    1. Improve fallback response quality
-    2. Detect incomplete metadata
-    3. Better error handling
-    4. Reduce disclaimer spam
+    Perubahan V4:
+    1. Integrate FatwaGuard untuk validasi topik sensitif
+    2. Block pertanyaan tentang halal/haram/wajib/sunnah
+    3. Replace dengan safe response jika perlu
+    4. Add disclaimer otomatis untuk topik hati-hati
+    5. Log semua blocked/replaced responses
     """
     
     def __init__(self):
@@ -24,26 +26,35 @@ class LLMService:
             "timeout": "Maaf, pemrosesan memakan waktu terlalu lama. Silakan coba dengan pertanyaan yang lebih spesifik.",
             "low_confidence": "Berikut adalah sumber hadis yang relevan dengan pertanyaan Anda:"
         }
+        logger.info("🔥 LLMService initialized with FatwaGuard protection")
     
     async def generate_response(self, query: str, context_chunks: List[Dict], force_arabic: Optional[bool] = None) -> tuple:
         """
-        Generate response dengan anti-hallucination checks
+        Generate response dengan FatwaGuard protection
         
-        🔥 V3: Improve handling untuk metadata incomplete
+        🔥 V4: Check topik sebelum generate answer
         """
         
         if not context_chunks:
             logger.warning(f"⚠️  No context chunks for query: {query}")
             return self.fallback_responses["no_context"], False
         
-        # Check metadata completeness
+        # 🔥 STEP 1: Analyze query dengan FatwaGuard
+        query_analysis = fatwa_guard.analyze_query(query)
+        logger.info(f"📋 Query Analysis: topic='{query_analysis['topic']}', action='{query_analysis['action']}'")
+        
+        # 🔥 STEP 2: BLOCK jika topik kritis
+        if query_analysis['should_block']:
+            logger.error(f"🚨 BLOCKING response for critical topic: {query_analysis['topic']}")
+            
+            return query_analysis['safe_response'], False  # No arabic text untuk safe response
+        
+        # Continue dengan normal flow
         metadata_completeness = self._check_metadata_completeness(context_chunks)
         logger.debug(f"📊 Metadata completeness: {metadata_completeness:.0%}")
         
-        # Detect query type
         query_type = self._detect_query_type(query)
         
-        # Determine if need Arabic
         if force_arabic is True:
             include_arabic = True
         elif force_arabic is False:
@@ -51,15 +62,14 @@ class LLMService:
         else:
             include_arabic = self._detect_need_arabic(query, query_type)
         
-        # Build context
         context = self._build_context_with_metadata(context_chunks, query_type)
         sources_info = self._extract_sources_info(context_chunks)
         
-        # Build prompt
-        prompt = self._build_balanced_prompt(query, context, query_type, include_arabic, sources_info)
+        # 🔥 IMPROVED: Prompt dengan FatwaGuard awareness
+        prompt = self._build_fatwa_aware_prompt(query, context, query_type, include_arabic, sources_info, query_analysis)
         
         try:
-            logger.info(f"🤖 Generating LLM response (type: {query_type}, arabic: {include_arabic})...")
+            logger.info(f"🤖 Generating LLM response (type: {query_type}, topic: {query_analysis['topic']})...")
             
             response = await asyncio.wait_for(
                 self._generate_with_ollama(prompt),
@@ -70,22 +80,36 @@ class LLMService:
                 logger.warning("⚠️  LLM returned empty/short response")
                 return self._generate_source_based_response(query, context_chunks), include_arabic
             
-            # Validate answer
-            validation_result = self._validate_answer(response, sources_info, query)
+            # 🔥 STEP 3: Validate response dengan FatwaGuard
+            validation_result = fatwa_guard.validate_response(query, response)
             
-            if not validation_result['is_valid']:
-                logger.warning(f"❌ Answer failed validation: {validation_result['reason']}")
+            logger.info(f"🔍 FatwaGuard validation: is_safe={validation_result['is_safe']}, action='{validation_result['action']}'")
+            
+            # 🔥 STEP 4: Handle blocked/replaced responses
+            if validation_result['should_replace']:
+                logger.warning(f"🚨 REPLACING response: {validation_result['reason']}")
+                
+                return validation_result['replacement'], False
+            
+            # 🔥 STEP 5: Normal validation
+            llm_validation = self._validate_answer(response, sources_info, query)
+            
+            if not llm_validation['is_valid']:
+                logger.warning(f"❌ Answer failed validation: {llm_validation['reason']}")
                 return self._generate_source_based_response(query, context_chunks), include_arabic
             
-            # Post-process response
             response = self._post_process_response(response, context_chunks)
             
-            # Append confidence note hanya jika sangat rendah
-            if validation_result['confidence'] < 0.4:
-                logger.warning(f"⚠️  Very low confidence: {validation_result['confidence']:.2f}")
+            # 🔥 STEP 6: Add disclaimer if needed
+            if validation_result['should_add_disclaimer']:
+                logger.info(f"⚠️  Adding disclaimer for topic: {query_analysis['topic']}")
+                response = response + "\n\n" + validation_result['disclaimer']
+            
+            if llm_validation['confidence'] < 0.4:
+                logger.warning(f"⚠️  Very low confidence: {llm_validation['confidence']:.2f}")
                 response += f"\n\n⚠️ **Catatan**: Untuk informasi lebih akurat, silakan konsultasikan dengan ulama terpercaya."
             
-            logger.info(f"✅ LLM response generated (confidence: {validation_result['confidence']:.2f})")
+            logger.info(f"✅ LLM response generated (confidence: {llm_validation['confidence']:.2f})")
             return response.strip(), include_arabic
         
         except asyncio.TimeoutError:
@@ -96,10 +120,69 @@ class LLMService:
             logger.error(f"❌ LLM error: {str(e)}", exc_info=True)
             return self._error_response(context_chunks), include_arabic
     
+    def _build_fatwa_aware_prompt(self, query: str, context: str, query_type: str, include_arabic: bool, sources_info: Dict, query_analysis: Dict) -> str:
+        """
+        🔥 NEW: Build prompt yang aware dengan FatwaGuard
+        """
+        
+        # Base instruction yang safer
+        grounding_instruction = """
+🔴 INSTRUCTION SANGAT PENTING UNTUK MENJAGA AKURASI ISLAM:
+
+1. JANGAN PERNAH CLAIM HUKUM ISLAM TANPA ULAMA
+   - LARANGAN: Menjawab "Hukumnya adalah...", "Wajib melakukan...", "Haram karena..."
+   - ALLOWED: "Hadis ini berbicara tentang...", "Berdasarkan hadis, beberapa ulama berpendapat..."
+
+2. JIKA DITANYA TENTANG HALAL/HARAM/WAJIB
+   - RESPONSE ANDA: "Ini memerlukan fatwa dari ulama, bukan hanya dari hadis"
+   - JANGAN PERNAH: Claim something is "pasti halal" atau "pasti haram"
+
+3. SEBUTKAN JIKA ADA IKHTILAF (PERBEDAAN PENDAPAT)
+   - Hadis yang sama bisa diinterpretasi berbeda oleh madhab berbeda
+   - Tulis: "Para ulama berbeda pendapat dalam masalah ini"
+   - JANGAN: Klaim satu pendapat sebagai "yang benar"
+
+4. UNTUK TOPIK SENSITIF (Nikah, Talak, Warisan, Aqidah)
+   - SELALU TAMBAHKAN: "Konsultasikan dengan ulama terpercaya"
+   - JANGAN PERNAH: Buat keputusan berdasarkan hadis saja
+
+5. HADIS ≠ HUKUM FINAL
+   - Hadis adalah SUMBER hukum, bukan hukum final
+   - Ulama melakukan IJTIHAD (analisis mendalam) untuk menerapkan hadis
+   - Jawaban Anda harus JELASKAN hadis, BUKAN klaim hukumnya
+"""
+        
+        type_instructions = {
+            'definition': "Jelaskan MAKNA hadis, bukan hukumnya. JANGAN claim 'hukumnya adalah...'",
+            'howto': "Jelaskan APA yang dikatakan hadis, bukan 'cara yang benar'. JANGAN claim procedural rules.",
+            'reason': "Jelaskan ALASAN dalam hadis, bukan klaim hikmah definitive. Ubah dengan 'sepertinya', 'mungkin alasannya'",
+            'perawi': "Jelaskan info PERAWI, bukan interpretasi hukum dari riwayatannya",
+            'number': "Sebutkan ANGKA dari hadis, JANGAN claim itu adalah hukum",
+            'general': "Jelaskan HADIS, bukan buat hukum Islam sendiri. Ingatkan butuh konsultasi ulama.",
+        }
+        
+        base_instruction = type_instructions.get(query_type, type_instructions['general'])
+        
+        # 🔥 Add FatwaGuard awareness ke prompt
+        fatwa_aware = ""
+        if query_analysis['topic'] in ['halal_haram', 'ibadah_hukum', 'muamalah_hukum', 'aqidah_tauhid']:
+            fatwa_aware = f"\n\n⚠️ TOPIK SENSITIF DETECTED: '{query_analysis['topic']}'\nJANGAN PERNAH CLAIM HUKUM. Ingatkan user untuk konsultasi ulama."
+        
+        prompt = f"""{grounding_instruction}
+
+KONTEKS HADIS:
+{context}
+
+PERTANYAAN: {query}
+
+INSTRUKSI KHUSUS: {base_instruction}{fatwa_aware}
+
+JAWABAN (INGAT: JELASKAN HADIS, BUKAN BUAT HUKUM):"""
+        
+        return prompt
+    
     def _check_metadata_completeness(self, chunks: List[Dict]) -> float:
-        """
-        🔥 NEW V3: Check how complete the metadata is
-        """
+        """Check metadata completeness"""
         if not chunks:
             return 0.0
         
@@ -124,29 +207,23 @@ class LLMService:
         return min(total_score / 3.0, 1.0)
     
     def _validate_answer(self, answer: str, sources_info: Dict, query: str) -> Dict:
-        """
-        Validate answer dengan less strict criteria
-        """
+        """Validate answer"""
         
         answer_lower = answer.lower()
         
-        # Check 1: Ada citation?
         has_citation = any(indicator in answer for indicator in [
             'kitab', 'hadis', 'hr.', 'perawi', 'diriwayatkan', 'riwayat',
             'shahih', 'hasan', 'dhaif', 'sahih', 'daif', 'derajat'
         ])
         
-        # Check 2: Keywords match?
         source_keywords = sources_info.get('keywords', [])
         query_keywords = set(re.findall(r'\w+', query.lower())) - {'apa', 'itu', 'yang', 'bagaimana', 'kenapa', 'jelaskan', 'tentang'}
         
         matched_keywords = len(query_keywords & set(source_keywords)) / max(len(query_keywords), 1) if query_keywords else 0.5
         
-        # Check 3: Length check
         answer_words = len(answer.split())
         is_reasonable_length = 20 < answer_words < 800
         
-        # Check 4: Hallucination red flags
         hallucination_flags = [
             r'menurut pendapat saya',
             r'saya pikir',
@@ -158,7 +235,6 @@ class LLMService:
             for flag in hallucination_flags
         )
         
-        # Calculate confidence
         confidence_score = 0.0
         
         if has_citation:
@@ -177,19 +253,13 @@ class LLMService:
         if not has_hallucination_flag:
             confidence_score += 0.1
         
-        # Validation logic
         is_valid = (
             len(answer.strip()) > 20 and
             not has_hallucination_flag
         )
         
-        is_confident = confidence_score >= 0.5
-        
-        logger.debug(f"Answer validation: valid={is_valid}, confident={is_confident}, score={confidence_score:.2f}")
-        
         return {
             'is_valid': is_valid,
-            'is_confident': is_confident,
             'confidence': confidence_score,
             'reason': "Valid answer",
             'citation_found': has_citation,
@@ -197,7 +267,7 @@ class LLMService:
         }
     
     def _extract_sources_info(self, chunks: List[Dict]) -> Dict:
-        """Extract keywords dan info dari sources"""
+        """Extract sources info"""
         all_keywords = set()
         kitab_names = []
         perawi_names = []
@@ -207,7 +277,6 @@ class LLMService:
             text = chunk.get('text') or chunk.get('chunk_text', '')
             text_lower = text.lower()
             
-            # Extract keywords
             words = re.findall(r'\w{2,}', text_lower)
             all_keywords.update(words)
             
@@ -223,70 +292,15 @@ class LLMService:
             'total_chunks': len(chunks)
         }
     
-    def _build_balanced_prompt(self, query: str, context: str, query_type: str, include_arabic: bool, sources_info: Dict) -> str:
-        """
-        Build prompt dengan balanced grounding
-        """
-        
-        grounding_instruction = """
-🔴 INSTRUCTION UNTUK JAWABAN:
-
-1. JAWAB DARI KONTEKS HADIS
-   - Gunakan informasi dari konteks hadis yang diberikan
-   - Jangan menambah info dari pengetahuan umum yang tidak di-konteks
-
-2. SERTAKAN CITATION JIKA MEMUNGKINKAN
-   - Contoh: "...berdasarkan hadis... (Kitab [Nama], HR. [Perawi])"
-   - Tidak wajib setiap kalimat, tapi minimal di akhir statement penting
-
-3. JAWAB LENGKAP DAN JELAS
-   - Berikan jawaban yang komprehensif
-   - Jangan hanya copy-paste text hadis, tapi jelaskan maknanya
-   - Berikan konteks dan penjelasan tambahan
-
-4. HONESTY TENTANG BATASAN
-   - Jika konteks tidak cukup, katakan dengan jujur
-   - Jangan spekulasi atau buat asumsi
-
-5. FORMAT JAWABAN
-   - Jelaskan dengan cara yang mudah dipahami
-   - Gunakan poin-poin jika diperlukan
-   - Sertakan rujukan hadis di akhir
-"""
-
-        type_instructions = {
-            'definition': "Berikan penjelasan/definisi yang jelas berdasarkan hadis. Jelaskan makna dan konteksnya.",
-            'howto': "Jelaskan langkah-langkah berdasarkan hadis. Bisa dalam bentuk poin-poin yang terstruktur.",
-            'reason': "Jelaskan alasan, hikmah, atau tujuan berdasarkan hadis. Interpretasikan makna hadis.",
-            'perawi': "Fokus pada informasi perawi. Jelaskan latar belakang atau konteks perawi jika ada.",
-            'number': "Sebutkan angka atau detail spesifik dari hadis. Kontekskan dalam konteks hadis.",
-            'general': "Jawab pertanyaan berdasarkan konteks hadis. Jelaskan dengan detail yang cukup.",
-        }
-        
-        base_instruction = type_instructions.get(query_type, type_instructions['general'])
-        
-        prompt = f"""{grounding_instruction}
-
-KONTEKS HADIS:
-{context}
-
-PERTANYAAN: {query}
-
-INSTRUKSI KHUSUS: {base_instruction}
-
-JAWABAN:"""
-        
-        return prompt
-    
     def _detect_query_type(self, query: str) -> str:
-        """Detect type of query"""
+        """Detect query type"""
         query_lower = query.lower()
         
         if any(word in query_lower for word in ['siapa', 'perawi', 'rawi']):
             return 'perawi'
         elif any(word in query_lower for word in ['apa', 'definisi', 'pengertian', 'maksud', 'arti']):
             return 'definition'
-        elif any(word in query_lower for word in ['bagaimana', 'cara', 'tata cara', 'jelaskan tentang hukum']):
+        elif any(word in query_lower for word in ['bagaimana', 'cara', 'tata cara']):
             return 'howto'
         elif any(word in query_lower for word in ['kenapa', 'mengapa', 'alasan']):
             return 'reason'
@@ -296,7 +310,7 @@ JAWABAN:"""
             return 'general'
     
     def _build_context_with_metadata(self, chunks: List[Dict], query_type: str) -> str:
-        """Build context dengan metadata lengkap"""
+        """Build context"""
         
         top_chunks = sorted(chunks, key=lambda x: x.get('final_score', x.get('similarity', 0)), reverse=True)[:3]
         
@@ -331,10 +345,8 @@ JAWABAN:"""
             if header_parts:
                 context_parts.append(" | ".join(header_parts))
             
-            # 🔥 FIXED V3: Use text field dengan fallback
             text = chunk.get('text') or chunk.get('chunk_text', '')
             if not text:
-                logger.warning(f"⚠️  Chunk {chunk.get('chunk_id')} has no text!")
                 text = "[Teks tidak tersedia]"
             
             if len(text) > 500:
@@ -346,39 +358,23 @@ JAWABAN:"""
         return "\n\n".join(context_parts)
     
     def _detect_need_arabic(self, query: str, query_type: str) -> bool:
-        """Detect apakah perlu tampilkan teks Arab"""
+        """Detect if need Arabic text"""
         query_lower = query.lower()
         
         explicit_arabic = [
             'arab', 'arabnya', 'tulisan arab', 'bahasa arab',
             'lafadz', 'lafal', 'lafadh', 'lafalnya',
-            'bunyi', 'bunyinya', 'berbunyi',
-            'teks asli', 'aslinya',
-            'full', 'lengkap', 'selengkapnya', 'lengkapnya'
+            'teks asli', 'aslinya'
         ]
         
         for keyword in explicit_arabic:
             if keyword in query_lower:
                 return True
         
-        hafalan_keywords = [
-            'doa', 'dzikir', 'zikir', 'wirid', 'shalawat',
-            'bacaan', 'dibaca', 'membaca', 'baca',
-            'hafal', 'menghafal', 'menghafalkan',
-            'tasbih', 'tahmid', 'tahlil', 'takbir'
-        ]
-        
-        for keyword in hafalan_keywords:
-            if keyword in query_lower:
-                return True
-        
-        if any(word in query_lower for word in ['nomor', 'no.', 'hadis ke', 'hadits ke', 'hadis no', '#']):
-            return True
-        
         return False
     
     async def _generate_with_ollama(self, prompt: str) -> str:
-        """Generate response using Ollama"""
+        """Generate with Ollama"""
         response = ollama.generate(
             model=self.model,
             prompt=prompt,
@@ -386,7 +382,7 @@ JAWABAN:"""
                 "temperature": 0.15,
                 "top_p": 0.7,
                 "top_k": 20,
-                "num_predict": 400,  # 🔥 INCREASED: 300 → 400
+                "num_predict": 400,
                 "stop": ["PERTANYAAN:", "KONTEKS:", "---"],
                 "num_ctx": 1024,
                 "num_thread": 4,
@@ -416,9 +412,7 @@ JAWABAN:"""
         return response
     
     def _generate_source_based_response(self, query: str, chunks: List[Dict]) -> str:
-        """
-        🔥 IMPROVED V3: Better source-based fallback
-        """
+        """Generate source-based fallback"""
         logger.info("📚 Using source-based fallback")
         
         response = "Berikut adalah hadis yang relevan dengan pertanyaan Anda:\n\n"
@@ -441,8 +435,6 @@ JAWABAN:"""
             
             if meta.get('derajat'):
                 response += f"⭐ Derajat: {meta['derajat']}\n"
-            if meta.get('bab'):
-                response += f"📖 Bab: {meta['bab']}\n"
             
             text = chunk.get('text') or chunk.get('chunk_text', '')
             if not text:
@@ -451,12 +443,12 @@ JAWABAN:"""
             response += f"\n**Teks Hadis:**\n{text[:400]}\n\n"
             response += "---\n\n"
         
-        response += "\n💡 **Catatan**: Untuk penjelasan lebih detail tentang hadis, silakan konsultasikan dengan ulama terpercaya."
+        response += "\n💡 **Catatan**: Untuk penjelasan lebih detail dan hukum yang tepat, konsultasikan dengan ulama terpercaya."
         
         return response
     
     def _timeout_response(self, chunks: List[Dict]) -> str:
-        """Response when timeout"""
+        """Timeout response"""
         response = (
             "⏱️ Pemrosesan memakan waktu lebih lama dari biasanya.\n\n"
             "Berikut adalah sumber hadis yang relevan:\n\n"
@@ -465,7 +457,7 @@ JAWABAN:"""
         return response
     
     def _error_response(self, chunks: List[Dict]) -> str:
-        """Response when error"""
+        """Error response"""
         response = (
             "❌ Terjadi kesalahan teknis saat memproses pertanyaan.\n\n"
             "Berikut adalah sumber hadis yang relevan untuk referensi:\n\n"
@@ -474,4 +466,4 @@ JAWABAN:"""
         return response
 
 # Global instance
-llm_service = LLMService() 
+llm_service = LLMService()

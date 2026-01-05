@@ -294,4 +294,4 @@ async def log_analytics_async(
 async def clear_cache():
     """Clear query cache"""
     query_cache.clear()
-    return {"message": "Cache cleared"}
+    return {"message": "Cache cleared"} 
