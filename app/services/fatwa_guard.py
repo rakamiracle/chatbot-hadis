@@ -19,80 +19,37 @@ class FatwaGuard:
     dan BERTANGGUNG JAWAB
     """
     
-    # 🔴 TOPIK YANG MEMERLUKAN FATWA (JANGAN JAWAB SEMBARANGAN)
+    # 🔴 TOPIK YANG MEMERLUKAN FATWA (HANYA BLOCK JIKA BENAR-BENAR MINTA FATWA)
+    # 🔥 V2: Dikurangi agresivitasnya - fokus pada pertanyaan fatwa eksplisit saja
     FORBIDDEN_FATWA_TOPICS = {
-        'halal_haram': {
+        'fatwa_explicit': {
             'keywords': [
-                'boleh', 'tidak boleh', 'halal', 'haram', 'dilarang', 'diperbolehkan',
-                'izin', 'larangan', 'disebabkan', 'mengapa tidak boleh', 'hukumnya'
+                'apa hukumnya', 'hukum dari', 'boleh atau tidak', 'halal atau haram',
+                'apakah dosa', 'berdosa jika', 'fatwa tentang', 'minta fatwa'
             ],
             'is_critical': True,
             'safe_response': (
-                "Pertanyaan Anda menyangkut hukum Islam (halal/haram) yang memerlukan analisis mendalam "
-                "oleh ulama yang kompeten dan memahami konteks kasus Anda secara menyeluruh.\n\n"
-                "⚠️ **PENTING**: Keputusan tentang halal/haram bisa berdampak besar pada hidup Anda. "
-                "Jangan buat keputusan hanya berdasarkan sumber online. "
-                "**WAJIB konsultasi langsung dengan ulama terpercaya**.\n\n"
-                "Sumber hadis yang relevan tersedia di bawah untuk Anda pelajari lebih lanjut dengan bimbingan ulama."
+                "Pertanyaan Anda meminta penetapan hukum Islam yang memerlukan fatwa dari ulama yang kompeten.\n\n"
+                "ℹ️ **Saya bisa membantu dengan:**\n"
+                "- Menampilkan hadis yang relevan dengan topik Anda\n"
+                "- Menjelaskan isi dan makna hadis\n"
+                "- Memberikan konteks sejarah dan perawi\n\n"
+                "⚠️ **Untuk keputusan hukum (halal/haram/wajib)**, silakan konsultasi dengan ulama terpercaya.\n\n"
+                "Berikut sumber hadis yang relevan:"
             )
         },
         
-        'ibadah_hukum': {
+        'sensitive_family': {
             'keywords': [
-                'wajib', 'sunnah', 'makruh', 'mubah', 'haram', 'syarat ibadah',
-                'rukun', 'cara yang benar', 'kewajiban', 'sunah yang dikerjakan'
+                'talak sah', 'cerai sah', 'nikah siri', 'pernikahan sah atau tidak'
             ],
             'is_critical': True,
             'safe_response': (
-                "Pertanyaan Anda tentang hukum ibadah (wajib/sunnah/makruh) memerlukan pemahaman "
-                "mendalam tentang syariat Islam yang kompleks.\n\n"
-                "⚠️ **PENTING**: Setiap madhab (Hanafi, Maliki, Syafi'i, Hanbali) memiliki pendapat berbeda "
-                "dalam banyak masalah ibadah. Tidak ada satu jawaban yang 'pasti benar' untuk semua umat Islam.\n\n"
-                "**Langkah yang tepat:**\n"
-                "1. Pelajari hadis dan dalil di bawah\n"
-                "2. Konsultasi dengan ulama dari madhab yang Anda ikuti\n"
-                "3. Pahami konteks dan alasan (ilat) dari hukum\n\n"
-                "Jangan mengikuti satu sumber saja tanpa bimbingan ulama."
-            )
-        },
-        
-        'muamalah_hukum': {
-            'keywords': [
-                'nikah', 'pernikahan', 'talak', 'cerai', 'warisan', 'jual beli',
-                'kontrak', 'riba', 'bunga bank', 'transaksi', 'hukum keluarga',
-                'mahar', 'nafkah', 'hak waris'
-            ],
-            'is_critical': True,
-            'safe_response': (
-                "Pertanyaan Anda menyangkut muamalah (transaksi/keluarga) yang memiliki aturan detail "
-                "dan sering berbeda antar madhab.\n\n"
-                "⚠️ **SANGAT PENTING**: Masalah nikah, talak, warisan, dan transaksi bisa berdampak serius "
-                "pada status keluarga dan harta Anda.\n\n"
-                "**WAJIB berkonsultasi dengan:**\n"
-                "- Pengadilan Agama (untuk masalah keluarga)\n"
-                "- Ulama yang berpengalaman\n"
-                "- Lembaga Fatwa MUI\n\n"
-                "Jangan buat keputusan penting hanya berdasarkan informasi online."
-            )
-        },
-        
-        'aqidah_tauhid': {
-            'keywords': [
-                'percaya', 'iman', 'kafir', 'murtad', 'syirik', 'bid\'ah',
-                'dosa besar', 'pelanggaran aqidah', 'harus percaya', 'keharusan beriman',
-                'kesesatan', 'menyimpang dari agama'
-            ],
-            'is_critical': True,
-            'safe_response': (
-                "Pertanyaan Anda tentang aqidah (keyakinan) adalah masalah sangat penting dan sensitif.\n\n"
-                "⚠️ **PENTING DIKETAHUI:** Masalah aqidah memerlukan pemahaman mendalam tentang tauhid "
-                "dan ilmu usul din yang tidak bisa dijelaskan hanya dalam singkat.\n\n"
-                "**Anjuran kami:**\n"
-                "1. Belajar langsung dari ulama yang kredibel\n"
-                "2. Ambil buku-buku aqidah yang terpercaya\n"
-                "3. Hindari sumber yang belum teruji keakuratannya\n\n"
-                "Masalah aqidah adalah fondasi hidup seorang Muslim dan perlu dipelajari dengan sungguh-sungguh, "
-                "bukan hanya dari bacaan singkat."
+                "Pertanyaan Anda menyangkut status keluarga yang memerlukan keputusan resmi.\n\n"
+                "⚠️ **PENTING**: Untuk masalah talak, nikah, dan status pernikahan:\n"
+                "- Konsultasi dengan Pengadilan Agama\n"
+                "- Konsultasi dengan ulama/kyai berpengalaman\n\n"
+                "Berikut hadis yang terkait untuk referensi:"
             )
         }
     }

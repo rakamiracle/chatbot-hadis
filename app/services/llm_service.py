@@ -122,62 +122,44 @@ class LLMService:
     
     def _build_fatwa_aware_prompt(self, query: str, context: str, query_type: str, include_arabic: bool, sources_info: Dict, query_analysis: Dict) -> str:
         """
-        🔥 NEW: Build prompt yang aware dengan FatwaGuard
+        🔥 V5: Simplified prompt - fokus pada instruksi positif
         """
         
-        # Base instruction yang safer
-        grounding_instruction = """
-🔴 INSTRUCTION SANGAT PENTING UNTUK MENJAGA AKURASI ISLAM:
+        # Simplified system instruction
+        system_instruction = """Kamu adalah asisten yang membantu menjelaskan hadis dari database.
 
-1. JANGAN PERNAH CLAIM HUKUM ISLAM TANPA ULAMA
-   - LARANGAN: Menjawab "Hukumnya adalah...", "Wajib melakukan...", "Haram karena..."
-   - ALLOWED: "Hadis ini berbicara tentang...", "Berdasarkan hadis, beberapa ulama berpendapat..."
+CARA MENJAWAB:
+1. Jelaskan isi dan makna hadis yang ditemukan
+2. Sebutkan sumber (kitab, perawi, nomor hadis) jika tersedia
+3. Gunakan bahasa Indonesia yang jelas dan mudah dipahami
+4. Jika ada beberapa hadis, rangkum poin utamanya
 
-2. JIKA DITANYA TENTANG HALAL/HARAM/WAJIB
-   - RESPONSE ANDA: "Ini memerlukan fatwa dari ulama, bukan hanya dari hadis"
-   - JANGAN PERNAH: Claim something is "pasti halal" atau "pasti haram"
-
-3. SEBUTKAN JIKA ADA IKHTILAF (PERBEDAAN PENDAPAT)
-   - Hadis yang sama bisa diinterpretasi berbeda oleh madhab berbeda
-   - Tulis: "Para ulama berbeda pendapat dalam masalah ini"
-   - JANGAN: Klaim satu pendapat sebagai "yang benar"
-
-4. UNTUK TOPIK SENSITIF (Nikah, Talak, Warisan, Aqidah)
-   - SELALU TAMBAHKAN: "Konsultasikan dengan ulama terpercaya"
-   - JANGAN PERNAH: Buat keputusan berdasarkan hadis saja
-
-5. HADIS ≠ HUKUM FINAL
-   - Hadis adalah SUMBER hukum, bukan hukum final
-   - Ulama melakukan IJTIHAD (analisis mendalam) untuk menerapkan hadis
-   - Jawaban Anda harus JELASKAN hadis, BUKAN klaim hukumnya
-"""
+CATATAN PENTING:
+- Jawaban harus berdasarkan hadis yang diberikan dalam konteks
+- Jika diminta tentang hukum spesifik (halal/haram), ingatkan untuk konsultasi ulama
+- Berikan jawaban yang informatif dan edukatif"""
         
         type_instructions = {
-            'definition': "Jelaskan MAKNA hadis, bukan hukumnya. JANGAN claim 'hukumnya adalah...'",
-            'howto': "Jelaskan APA yang dikatakan hadis, bukan 'cara yang benar'. JANGAN claim procedural rules.",
-            'reason': "Jelaskan ALASAN dalam hadis, bukan klaim hikmah definitive. Ubah dengan 'sepertinya', 'mungkin alasannya'",
-            'perawi': "Jelaskan info PERAWI, bukan interpretasi hukum dari riwayatannya",
-            'number': "Sebutkan ANGKA dari hadis, JANGAN claim itu adalah hukum",
-            'general': "Jelaskan HADIS, bukan buat hukum Islam sendiri. Ingatkan butuh konsultasi ulama.",
+            'definition': "Jelaskan makna dan pengertian berdasarkan hadis yang ditemukan.",
+            'howto': "Jelaskan tata cara atau panduan berdasarkan hadis yang ditemukan.",
+            'reason': "Jelaskan alasan atau hikmah berdasarkan hadis yang ditemukan.",
+            'perawi': "Jelaskan informasi tentang perawi hadis yang ditemukan.",
+            'number': "Sebutkan angka atau jumlah yang disebutkan dalam hadis.",
+            'general': "Jelaskan isi hadis yang relevan dengan pertanyaan.",
         }
         
-        base_instruction = type_instructions.get(query_type, type_instructions['general'])
+        instruction = type_instructions.get(query_type, type_instructions['general'])
         
-        # 🔥 Add FatwaGuard awareness ke prompt
-        fatwa_aware = ""
-        if query_analysis['topic'] in ['halal_haram', 'ibadah_hukum', 'muamalah_hukum', 'aqidah_tauhid']:
-            fatwa_aware = f"\n\n⚠️ TOPIK SENSITIF DETECTED: '{query_analysis['topic']}'\nJANGAN PERNAH CLAIM HUKUM. Ingatkan user untuk konsultasi ulama."
-        
-        prompt = f"""{grounding_instruction}
+        prompt = f"""{system_instruction}
 
-KONTEKS HADIS:
+HADIS DARI DATABASE:
 {context}
 
 PERTANYAAN: {query}
 
-INSTRUKSI KHUSUS: {base_instruction}{fatwa_aware}
+INSTRUKSI: {instruction}
 
-JAWABAN (INGAT: JELASKAN HADIS, BUKAN BUAT HUKUM):"""
+JAWABAN:"""
         
         return prompt
     
