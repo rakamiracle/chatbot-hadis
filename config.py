@@ -64,4 +64,9 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
 
+      # 🔥 NEW: Cache Configuration
+    ENABLE_SESSION_ISOLATION: bool = True
+    CACHE_TTL_MINUTES: int = 30  # Dikurangi dari 60 ke 30 untuk lebih fresh
+    ENABLE_GLOBAL_CACHE: bool = True  # Allow common patterns to be shared
+
 settings = Settings()

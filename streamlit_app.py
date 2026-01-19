@@ -145,7 +145,27 @@ with st.sidebar:
 
     st.markdown("---")
     if st.button("🗑️ Hapus Riwayat Chat", use_container_width=True):
+        # Clear local messages
         st.session_state.messages = []
+        
+        # ✅ TAMBAHAN: Clear backend cache untuk session ini
+        old_session_id = st.session_state.session_id
+        try:
+            response = requests.post(
+                f"{API_URL}/chat/clear-session-cache",
+                json={"session_id": old_session_id},
+                timeout=5
+            )
+            if response.status_code == 200:
+                data = response.json()
+                st.toast(f"✅ Cache dihapus ({data.get('cleared_entries', 0)} entries)", icon="✅")
+            else:
+                st.toast("⚠️ Gagal menghapus cache backend", icon="⚠️")
+        except Exception as e:
+            # Ignore jika backend tidak tersedia
+            st.toast(f"⚠️ Backend tidak tersedia: {str(e)[:50]}", icon="⚠️")
+        
+        # Generate new session ID
         st.session_state.session_id = str(uuid.uuid4())
         st.rerun()
 
@@ -359,6 +379,33 @@ if prompt := st.chat_input("Tanyakan tentang hadis..."):
                 st.error(err)
                 st.session_state.messages.append({"role": "assistant", "content": err})
 
+        # Debug Panel (Opsional - bisa di-comment jika tidak perlu)
+with st.sidebar:
+    st.markdown("---")
+    with st.expander("🔧 Debug Info", expanded=False):
+        st.caption(f"Session ID: {st.session_state.session_id[:8]}...")
+        
+        # Get cache stats
+        try:
+            stats_response = requests.get(f"{API_URL}/chat/cache-stats", timeout=3)
+            if stats_response.status_code == 200:
+                stats = stats_response.json()['stats']
+                st.metric("Total Cache Entries", stats['total_entries'])
+                st.metric("Embedding Cache", stats['embedding_cache'])
+                st.metric("Results Cache", stats['results_cache'])
+                st.metric("Cache TTL (minutes)", stats['ttl_minutes'])
+            else:
+                st.caption("Cache stats tidak tersedia")
+        except:
+            st.caption("Backend tidak tersedia")
+        
+        if st.button("🔄 Force Clear All Cache", use_container_width=True):
+            try:
+                requests.post(f"{API_URL}/chat/clear-cache")
+                st.success("✅ All cache cleared!")
+                st.rerun()
+            except:
+                st.error("❌ Failed to clear cache")
 # Footer
 st.markdown("---")
 st.caption("Chatbot Hadis v2.0 | Improved Layout & Complete Answers | Powered by Mistral & pgvector")

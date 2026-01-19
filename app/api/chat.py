@@ -22,7 +22,7 @@ router = APIRouter()
 @router.post("/", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     """
-    🔥 IMPROVED V3: Fix untuk text field kosong & metadata lengkap
+    🔥 IMPROVED V4: Session isolation untuk cache
     """
     start_time = datetime.utcnow()
     start_time_ms = time.time() * 1000
@@ -35,6 +35,10 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     
     try:
         logger.info(f"📝 Query: {request.query[:100]}")
+        
+        # ✅ IMPORTANT: Generate atau ambil session_id
+        session_id = request.session_id or str(uuid.uuid4())
+        logger.info(f"🔑 Session ID: {session_id}")
         
         # Safety check
         validation_result = query_validator.validate_query(request.query)
@@ -51,30 +55,43 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
         search_service = VectorSearch(threshold_mode='normal')
         llm_service = LLMService()
 
-        # Cache check
+        # ✅ Cache check DENGAN session_id
         cache_key_filters = {
             'kitab': request.kitab_filter,
             'docs': request.document_ids
         }
         
-        cached_chunks = query_cache.get_results(request.query, cache_key_filters)
+        cached_chunks = query_cache.get_results(
+            request.query, 
+            cache_key_filters,
+            session_id=session_id  # ← TAMBAHAN: Session isolation
+        )
         
         if cached_chunks:
-            logger.info("✅ Full cache hit")
+            logger.info(f"✅ Full cache hit for session {session_id}")
             chunks = cached_chunks
             cache_hit = True
         else:
-            # Embedding
-            qemb = query_cache.get_embedding(request.query)
+            # ✅ Embedding cache DENGAN session_id
+            qemb = query_cache.get_embedding(
+                request.query,
+                session_id=session_id  # ← TAMBAHAN: Session isolation
+            )
             
             if qemb:
-                logger.info("✅ Embedding cache hit")
+                logger.info(f"✅ Embedding cache hit for session {session_id}")
             else:
                 logger.info("🔄 Generating embedding...")
                 embed_start = time.time() * 1000
                 qemb = await embed_service.generate_embedding(request.query)
                 embedding_time_ms = time.time() * 1000 - embed_start
-                query_cache.set_embedding(request.query, qemb)
+                
+                # ✅ Set embedding DENGAN session_id
+                query_cache.set_embedding(
+                    request.query, 
+                    qemb,
+                    session_id=session_id  # ← TAMBAHAN: Session isolation
+                )
             
             # Vector search
             logger.info("🔍 Searching database...")
@@ -90,7 +107,13 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             search_time_ms = time.time() * 1000 - search_start
             
             if chunks:
-                query_cache.set_results(request.query, chunks, cache_key_filters)
+                # ✅ Set results DENGAN session_id
+                query_cache.set_results(
+                    request.query, 
+                    chunks, 
+                    cache_key_filters,
+                    session_id=session_id  # ← TAMBAHAN: Session isolation
+                )
         
         if not chunks:
             logger.warning(f"⚠️  No chunks found for: '{request.query}'")
@@ -109,7 +132,7 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             return ChatResponse(
                 answer=no_results_message,
                 sources=[],
-                session_id=request.session_id or str(uuid.uuid4())
+                session_id=session_id  # ← Return session_id
             )
         
         logger.info(f"✅ Found {len(chunks)} chunks")
@@ -129,71 +152,63 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 answer = answer + disclaimer
                 logger.info(f"⚠️  Added disclaimer (severity: {validation_result['severity']})")
         
-        # 🔥 FIXED V3: Build sources dengan TEXT field lengkap
+        # Build sources dengan TEXT field lengkap
         sources = []
         for c in chunks[:5]:
             meta = c.get('metadata', {})
             
-            # 🔥 PENTING: Pastikan text field ada!
             text_content = c.get('text', '')
             if not text_content:
                 logger.warning(f"⚠️  Chunk {c.get('chunk_id')} has empty text, using fallback")
-                text_content = c.get('chunk_text', '')[:200]  # Fallback
+                text_content = c.get('chunk_text', '')[:200]
             
             source_data = {
                 "chunk_id": c['chunk_id'],
-                "text": text_content[:300],  # 🔥 Pastikan ada
+                "text": text_content[:300],
                 "page_number": c['page_number'],
                 "similarity_score": c.get('final_score', c.get('similarity', 0)),
                 "kitab_name": c.get('kitab_name', ''),
                 "document_id": c['document_id']
             }
             
-            # 🔥 FIXED: Mapping metadata fields properly
             if meta.get('arab'):
                 source_data['arabic_text'] = meta['arab']
             
-            # 🔥 FIXED: Extract perawi properly
             perawi = meta.get('perawi')
             if perawi:
                 source_data['perawi'] = perawi
             
-            # 🔥 FIXED: Extract hadis_number properly
             hadis_num = meta.get('nomor_hadis') or meta.get('hadis_id')
             if hadis_num:
                 source_data['hadis_number'] = str(hadis_num)
             
-            # Bab info
             if meta.get('bab'):
                 source_data['bab'] = meta['bab']
             
             if meta.get('bab_nomor'):
                 source_data['bab_nomor'] = meta['bab_nomor']
             
-            # Kitab metadata
             if meta.get('kitab'):
                 source_data['kitab_metadata'] = meta['kitab']
             
-            # Derajat
             if meta.get('derajat'):
                 source_data['derajat'] = meta['derajat']
             
             sources.append(Source(**source_data))
         
         # Save chat history (async)
-        sid = request.session_id or str(uuid.uuid4())
         asyncio.create_task(
-            save_chat_history(sid, request.query, answer)
+            save_chat_history(session_id, request.query, answer)
         )
         
         response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
-        log_query(sid, request.query, response_time)
-        logger.info(f"✅ Response in {response_time:.0f}ms | Chunks: {len(chunks)} | Similarity: {chunks[0].get('final_score', chunks[0].get('similarity', 0)):.3f}")
+        log_query(session_id, request.query, response_time)
+        logger.info(f"✅ Response in {response_time:.0f}ms | Session: {session_id[:8]}... | Chunks: {len(chunks)} | Similarity: {chunks[0].get('final_score', chunks[0].get('similarity', 0)):.3f}")
         
         # Log analytics (async)
         asyncio.create_task(
             log_analytics_async(
-                session_id=uuid.UUID(sid) if len(sid) == 36 else uuid.uuid4(),
+                session_id=uuid.UUID(session_id) if len(session_id) == 36 else uuid.uuid4(),
                 query_text=request.query,
                 response_time_ms=response_time,
                 embedding_time_ms=embedding_time_ms,
@@ -205,7 +220,12 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             )
         )
         
-        return ChatResponse(answer=answer, sources=sources, session_id=sid, include_arabic=include_arabic)
+        return ChatResponse(
+            answer=answer, 
+            sources=sources, 
+            session_id=session_id,  # ← Return session_id
+            include_arabic=include_arabic
+        )
     
     except HTTPException:
         raise
@@ -295,3 +315,45 @@ async def clear_cache():
     """Clear query cache"""
     query_cache.clear()
     return {"message": "Cache cleared"} 
+
+@router.post("/clear-session-cache")
+async def clear_session_cache(request: dict):
+    """
+    Clear cache untuk session tertentu
+    
+    Body:
+        {
+            "session_id": "uuid-string"
+        }
+    """
+    session_id = request.get("session_id")
+    
+    if not session_id:
+        raise HTTPException(400, "session_id is required")
+    
+    try:
+        cleared_count = query_cache.clear_session(session_id)
+        
+        logger.info(f"🗑️ Cleared {cleared_count} cache entries for session {session_id}")
+        
+        return {
+            "success": True,
+            "message": f"Cache cleared for session {session_id}",
+            "cleared_entries": cleared_count
+        }
+    
+    except Exception as e:
+        logger.error(f"❌ Error clearing session cache: {e}")
+        raise HTTPException(500, f"Error clearing cache: {str(e)}")
+
+@router.get("/cache-stats")
+async def get_cache_stats():
+    """Get cache statistics"""
+    try:
+        stats = query_cache.get_stats()
+        return {
+            "success": True,
+            "stats": stats
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Error getting stats: {str(e)}")

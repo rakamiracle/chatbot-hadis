@@ -361,7 +361,7 @@ JAWABAN:"""
             model=self.model,
             prompt=prompt,
             options={
-                "temperature": 0.15,
+                "temperature": 0.05, # 0.15, sebelumnya segini
                 "top_p": 0.7,
                 "top_k": 20,
                 "num_predict": 400,
