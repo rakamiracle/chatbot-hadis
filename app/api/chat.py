@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select  # ✅ tambahan
 from app.database.connection import get_db
 from app.schemas.chat import ChatRequest, ChatResponse, Source
 from app.services.embedding_service import EmbeddingService
@@ -11,132 +12,216 @@ from app.services.query_validator import query_validator
 from app.services.query_expander import query_expander
 from app.models.chat_history import ChatHistory
 from app.models.analytics import ErrorSeverity
+from app.models.chunk import HadisChunk  # ✅ tambahan
+from app.models.document import HadisDocument  # ✅ tambahan
 from app.utils.logger import logger, log_query
 from datetime import datetime
 import uuid
 import asyncio
 import time
+import os  # ✅ tambahan
+import re  # ✅ tambahan
 
 router = APIRouter()
+
+
+def _get_only_document_id() -> int | None:
+    raw = os.getenv("ONLY_DOCUMENT_ID")
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        raise HTTPException(500, "ONLY_DOCUMENT_ID must be an integer")
+
+
+def _parse_hadis_number(query: str) -> str | None:
+    """
+    Deteksi pola: 'hadits nomor 1446' / 'hadis nomor 1446'
+    """
+    q = (query or "").lower()
+    m = re.search(r"(?:hadits|hadis)\s+nomor\s+(\d+)", q)
+    return m.group(1) if m else None
+
 
 @router.post("/", response_model=ChatResponse)
 async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
     """
     🔥 IMPROVED V4: Session isolation untuk cache
+    + Focus mode: ONLY_DOCUMENT_ID (force document_ids)
+
+    ✅ NEW: deterministic lookup untuk query "hadits nomor X" via chunk_metadata['hadis_id']
     """
     start_time = datetime.utcnow()
     start_time_ms = time.time() * 1000
-    
+
     # Timing variables
     embedding_time_ms = None
     search_time_ms = None
     llm_time_ms = None
     cache_hit = False
-    
+
     try:
         logger.info(f"📝 Query: {request.query[:100]}")
-        
+
         # ✅ IMPORTANT: Generate atau ambil session_id
         session_id = request.session_id or str(uuid.uuid4())
         logger.info(f"🔑 Session ID: {session_id}")
-        
+
+        # ✅ Focus mode: paksa document_ids jika env ONLY_DOCUMENT_ID aktif
+        only_doc_id = _get_only_document_id()
+        if only_doc_id is not None:
+            request.document_ids = [only_doc_id]
+            logger.info(f"🎯 Focus mode ON: ONLY_DOCUMENT_ID={only_doc_id}")
+
         # Safety check
         validation_result = query_validator.validate_query(request.query)
-        
-        if not validation_result['is_valid']:
-            raise HTTPException(400, validation_result.get('error', 'Invalid query'))
-        
+        if not validation_result["is_valid"]:
+            raise HTTPException(400, validation_result.get("error", "Invalid query"))
+
         # Query expansion
         expansion = query_expander.expand_query(request.query)
         logger.debug(f"📊 Query Expansion: {expansion}")
-        
+
         # Initialize services
         embed_service = EmbeddingService()
-        search_service = VectorSearch(threshold_mode='normal')
+        search_service = VectorSearch(threshold_mode="normal")
         llm_service = LLMService()
 
-        # ✅ Cache check DENGAN session_id
-        cache_key_filters = {
-            'kitab': request.kitab_filter,
-            'docs': request.document_ids
-        }
-        
-        cached_chunks = query_cache.get_results(
-            request.query, 
-            cache_key_filters,
-            session_id=session_id  # ← TAMBAHAN: Session isolation
-        )
-        
-        if cached_chunks:
-            logger.info(f"✅ Full cache hit for session {session_id}")
-            chunks = cached_chunks
-            cache_hit = True
-        else:
-            # ✅ Embedding cache DENGAN session_id
-            qemb = query_cache.get_embedding(
-                request.query,
-                session_id=session_id  # ← TAMBAHAN: Session isolation
+        # =========================
+        # ✅ NEW: Deterministic lookup "hadits nomor X"
+        # =========================
+        chunks = None
+        hadis_no = _parse_hadis_number(request.query)
+        if hadis_no:
+            doc_ids = request.document_ids or []
+            stmt = (
+                select(
+                    HadisChunk.id,
+                    HadisChunk.chunk_text,
+                    HadisChunk.page_number,
+                    HadisChunk.chunk_metadata,
+                    HadisChunk.document_id,
+                    HadisDocument.kitab_name,
+                )
+                .join(HadisDocument, HadisChunk.document_id == HadisDocument.id)
+                .where(HadisChunk.chunk_metadata["hadis_id"].astext == hadis_no)
             )
-            
-            if qemb:
-                logger.info(f"✅ Embedding cache hit for session {session_id}")
+
+            if request.kitab_filter:
+                stmt = stmt.where(HadisDocument.kitab_name.ilike(f"%{request.kitab_filter}%"))
+            if doc_ids:
+                stmt = stmt.where(HadisChunk.document_id.in_(doc_ids))
+
+            result = await db.execute(stmt.limit(5))
+            rows = result.all()
+
+            if rows:
+                chunks = []
+                for r in rows:
+                    chunks.append({
+                        "chunk_id": r.id,
+                        "text": r.chunk_text or "",
+                        "chunk_text": r.chunk_text or "",
+                        "page_number": r.page_number,
+                        "metadata": r.chunk_metadata or {},
+                        "kitab_name": r.kitab_name,
+                        "document_id": r.document_id,
+                        # skor dummy tinggi supaya sorting/pipeline aman
+                        "similarity": 1.0,
+                        "final_score": 1.0,
+                    })
+                logger.info(f"🎯 Direct hadis_id lookup hit: hadis_id={hadis_no} rows={len(chunks)}")
             else:
-                logger.info("🔄 Generating embedding...")
-                embed_start = time.time() * 1000
-                qemb = await embed_service.generate_embedding(request.query)
-                embedding_time_ms = time.time() * 1000 - embed_start
-                
-                # ✅ Set embedding DENGAN session_id
-                query_cache.set_embedding(
-                    request.query, 
-                    qemb,
-                    session_id=session_id  # ← TAMBAHAN: Session isolation
-                )
-            
-            # Vector search
-            logger.info("🔍 Searching database...")
-            search_start = time.time() * 1000
-            
-            chunks = await search_service.search_with_fallback(
-                qemb,
+                logger.info(f"🎯 Direct hadis_id lookup miss: hadis_id={hadis_no} (fallback to cache/vector)")
+
+        # =========================
+        # Normal flow (cache/embedding/vector) hanya jika belum ada chunks dari lookup nomor
+        # =========================
+        if chunks is None:
+            # ✅ Cache check DENGAN session_id (pakai filter yg sudah dioverride focus mode)
+            cache_key_filters = {
+                "kitab": request.kitab_filter,
+                "docs": request.document_ids,
+            }
+
+            cached_chunks = query_cache.get_results(
                 request.query,
-                db,
-                kitab_filter=request.kitab_filter,
-                document_ids=request.document_ids
+                cache_key_filters,
+                session_id=session_id
             )
-            search_time_ms = time.time() * 1000 - search_start
-            
-            if chunks:
-                # ✅ Set results DENGAN session_id
-                query_cache.set_results(
-                    request.query, 
-                    chunks, 
-                    cache_key_filters,
-                    session_id=session_id  # ← TAMBAHAN: Session isolation
+
+            if cached_chunks:
+                logger.info(f"✅ Full cache hit for session {session_id}")
+                chunks = cached_chunks
+                cache_hit = True
+            else:
+                # ✅ Embedding cache DENGAN session_id
+                qemb = query_cache.get_embedding(
+                    request.query,
+                    session_id=session_id
                 )
-        
+
+                if qemb:
+                    logger.info(f"✅ Embedding cache hit for session {session_id}")
+                else:
+                    logger.info("🔄 Generating embedding...")
+                    embed_start = time.time() * 1000
+                    qemb = await embed_service.generate_embedding(request.query)
+                    embedding_time_ms = time.time() * 1000 - embed_start
+
+                    query_cache.set_embedding(
+                        request.query,
+                        qemb,
+                        session_id=session_id
+                    )
+
+                # Vector search
+                logger.info("🔍 Searching database...")
+                search_start = time.time() * 1000
+
+                chunks = await search_service.search_with_fallback(
+                    qemb,
+                    request.query,
+                    db,
+                    kitab_filter=request.kitab_filter,
+                    document_ids=request.document_ids
+                )
+                search_time_ms = time.time() * 1000 - search_start
+
+                if chunks:
+                    query_cache.set_results(
+                        request.query,
+                        chunks,
+                        cache_key_filters,
+                        session_id=session_id
+                    )
+
+        # =========================
+        # No chunks
+        # =========================
         if not chunks:
             logger.warning(f"⚠️  No chunks found for: '{request.query}'")
-            
+
             no_results_message = (
                 "Maaf, saya tidak menemukan hadis yang relevan dengan pertanyaan Anda. "
                 "Silakan coba dengan kata kunci yang berbeda atau lebih spesifik.\n\n"
             )
-            
+
             suggestions = query_expander.get_fallback_suggestions(request.query)
             if suggestions:
                 no_results_message += "**Coba pertanyaan ini:**\n"
                 for i, suggestion in enumerate(suggestions, 1):
                     no_results_message += f"{i}. {suggestion}\n"
-            
+
             return ChatResponse(
                 answer=no_results_message,
                 sources=[],
-                session_id=session_id  # ← Return session_id
+                session_id=session_id
             )
-        
+
         logger.info(f"✅ Found {len(chunks)} chunks")
-        
+
         # Generate response
         logger.info("🤖 Generating answer...")
         llm_start = time.time() * 1000
@@ -144,67 +229,68 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             request.query, chunks, force_arabic=request.force_arabic
         )
         llm_time_ms = time.time() * 1000 - llm_start
-        
+
         # Add disclaimer if needed
-        if validation_result['is_sensitive']:
-            disclaimer = validation_result['disclaimer']
+        if validation_result["is_sensitive"]:
+            disclaimer = validation_result["disclaimer"]
             if disclaimer:
                 answer = answer + disclaimer
                 logger.info(f"⚠️  Added disclaimer (severity: {validation_result['severity']})")
-        
-        # Build sources dengan TEXT field lengkap
+
+        # Build sources
         sources = []
         for c in chunks[:5]:
-            meta = c.get('metadata', {})
-            
-            text_content = c.get('text', '')
+            meta = c.get("metadata", {})
+
+            text_content = c.get("text", "")
             if not text_content:
                 logger.warning(f"⚠️  Chunk {c.get('chunk_id')} has empty text, using fallback")
-                text_content = c.get('chunk_text', '')[:200]
-            
+                text_content = c.get("chunk_text", "")[:200]
+
             source_data = {
-                "chunk_id": c['chunk_id'],
+                "chunk_id": c["chunk_id"],
                 "text": text_content[:300],
-                "page_number": c['page_number'],
-                "similarity_score": c.get('final_score', c.get('similarity', 0)),
-                "kitab_name": c.get('kitab_name', ''),
-                "document_id": c['document_id']
+                "page_number": c["page_number"],
+                "similarity_score": c.get("final_score", c.get("similarity", 0)),
+                "kitab_name": c.get("kitab_name", ""),
+                "document_id": c["document_id"],
             }
-            
-            if meta.get('arab'):
-                source_data['arabic_text'] = meta['arab']
-            
-            perawi = meta.get('perawi')
+
+            if meta.get("arab"):
+                source_data["arabic_text"] = meta["arab"]
+
+            perawi = meta.get("perawi")
             if perawi:
-                source_data['perawi'] = perawi
-            
-            hadis_num = meta.get('nomor_hadis') or meta.get('hadis_id')
+                source_data["perawi"] = perawi
+
+            hadis_num = meta.get("nomor_hadis") or meta.get("hadis_id")
             if hadis_num:
-                source_data['hadis_number'] = str(hadis_num)
-            
-            if meta.get('bab'):
-                source_data['bab'] = meta['bab']
-            
-            if meta.get('bab_nomor'):
-                source_data['bab_nomor'] = meta['bab_nomor']
-            
-            if meta.get('kitab'):
-                source_data['kitab_metadata'] = meta['kitab']
-            
-            if meta.get('derajat'):
-                source_data['derajat'] = meta['derajat']
-            
+                source_data["hadis_number"] = str(hadis_num)
+
+            if meta.get("bab"):
+                source_data["bab"] = meta["bab"]
+
+            if meta.get("bab_nomor"):
+                source_data["bab_nomor"] = meta["bab_nomor"]
+
+            if meta.get("kitab"):
+                source_data["kitab_metadata"] = meta["kitab"]
+
+            if meta.get("derajat"):
+                source_data["derajat"] = meta["derajat"]
+
             sources.append(Source(**source_data))
-        
+
         # Save chat history (async)
-        asyncio.create_task(
-            save_chat_history(session_id, request.query, answer)
-        )
-        
+        asyncio.create_task(save_chat_history(session_id, request.query, answer))
+
         response_time = (datetime.utcnow() - start_time).total_seconds() * 1000
         log_query(session_id, request.query, response_time)
-        logger.info(f"✅ Response in {response_time:.0f}ms | Session: {session_id[:8]}... | Chunks: {len(chunks)} | Similarity: {chunks[0].get('final_score', chunks[0].get('similarity', 0)):.3f}")
-        
+        logger.info(
+            f"✅ Response in {response_time:.0f}ms | Session: {session_id[:8]}... | "
+            f"Chunks: {len(chunks)} | Similarity: {chunks[0].get('final_score', chunks[0].get('similarity', 0)):.3f}"
+        )
+
         # Log analytics (async)
         asyncio.create_task(
             log_analytics_async(
@@ -219,19 +305,19 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
                 kitab_filter=request.kitab_filter
             )
         )
-        
+
         return ChatResponse(
-            answer=answer, 
-            sources=sources, 
-            session_id=session_id,  # ← Return session_id
+            answer=answer,
+            sources=sources,
+            session_id=session_id,
             include_arabic=include_arabic
         )
-    
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error("❌ Error in chat endpoint: {}", str(e), exc_info=True)
-        
+
         try:
             asyncio.create_task(
                 analytics_service.log_error(
@@ -244,26 +330,27 @@ async def chat(request: ChatRequest, db: AsyncSession = Depends(get_db)):
             )
         except:
             pass
-        
+
         raise HTTPException(500, f"Error: {str(e)}")
+
 
 async def save_chat_history(session_id: str, query: str, answer: str):
     """Save chat history in background"""
     try:
         from app.database.connection import AsyncSessionLocal
-        
+
         embed_service = EmbeddingService()
-        
+
         query_text = query[:2000] if len(query) > 2000 else query
         answer_text = answer[:2000] if len(answer) > 2000 else answer
         combined_text = f"Q: {query_text} A: {answer_text}"
         if len(combined_text) > 2000:
             combined_text = combined_text[:2000]
-        
+
         query_embedding = await embed_service.generate_embedding(query_text)
         response_embedding = await embed_service.generate_embedding(answer_text)
         combined_embedding = await embed_service.generate_embedding(combined_text)
-        
+
         async with AsyncSessionLocal() as db:
             hist = ChatHistory(
                 session_id=uuid.UUID(session_id) if len(session_id) == 36 else uuid.uuid4(),
@@ -276,9 +363,10 @@ async def save_chat_history(session_id: str, query: str, answer: str):
             )
             db.add(hist)
             await db.commit()
-            logger.info(f"✅ Chat history saved")
+            logger.info("✅ Chat history saved")
     except Exception as e:
         logger.error(f"Error saving history: {e}")
+
 
 async def log_analytics_async(
     session_id: uuid.UUID,
@@ -310,41 +398,44 @@ async def log_analytics_async(
     except Exception as e:
         logger.error(f"Error logging analytics: {e}")
 
+
 @router.post("/clear-cache")
 async def clear_cache():
     """Clear query cache"""
     query_cache.clear()
-    return {"message": "Cache cleared"} 
+    return {"message": "Cache cleared"}
+
 
 @router.post("/clear-session-cache")
 async def clear_session_cache(request: dict):
     """
     Clear cache untuk session tertentu
-    
+
     Body:
         {
             "session_id": "uuid-string"
         }
     """
     session_id = request.get("session_id")
-    
+
     if not session_id:
         raise HTTPException(400, "session_id is required")
-    
+
     try:
         cleared_count = query_cache.clear_session(session_id)
-        
+
         logger.info(f"🗑️ Cleared {cleared_count} cache entries for session {session_id}")
-        
+
         return {
             "success": True,
             "message": f"Cache cleared for session {session_id}",
             "cleared_entries": cleared_count
         }
-    
+
     except Exception as e:
         logger.error(f"❌ Error clearing session cache: {e}")
         raise HTTPException(500, f"Error clearing cache: {str(e)}")
+
 
 @router.get("/cache-stats")
 async def get_cache_stats():

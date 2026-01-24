@@ -18,6 +18,9 @@ from app.models.analytics import (
 )
 
 __all__ = [
+    "Kitab",
+    "Bab", 
+    "Hadis",
     "HadisDocument",
     "DocumentStatus", 
     "HadisChunk",
