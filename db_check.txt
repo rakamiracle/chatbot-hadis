@@ -1,0 +1,4 @@
+  File "<string>", line 1
+    import asyncio; from app.database.connection import AsyncSessionLocal; from sqlalchemy import text; async def f(): async with AsyncSessionLocal() as db: r = await db.execute(text('SELECT COUNT(*) FROM hadis_chunks')); c = r.scalar(); print(f'CHUNKS: {c}'); r = await db.execute(text('SELECT COUNT(*) FROM hadis_documents')); d = r.scalar(); print(f'DOCS: {d}') ; asyncio.run(f())
+                                                                                                        ^^^^^
+SyntaxError: invalid syntax

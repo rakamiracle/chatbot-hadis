@@ -16,6 +16,8 @@ class HadisChunker:
             r'\n\s*HR\.\s*\w+',  # "HR. Bukhari"
             r'حَدَّثَنَا',  # Hadits Arab (haddatsana)
             r'عَنْ',  # Arab (an - dari)
+            r'\n\s*Bab\s+\d+',  # "Bab 5"
+            r'\n\s*Bab\s*:',  # "Bab: ..."
         ]
         
         # Coba split berdasarkan pattern hadis
@@ -88,32 +90,86 @@ class HadisChunker:
         return chunks
     
     def _extract_metadata(self, text: str) -> Dict:
-        """Ekstrak metadata dari chunk (perawi, kitab, dll)"""
+        """Ekstrak metadata dari chunk - IMPROVED VERSION"""
         metadata = {}
         
-        # Deteksi perawi
-        perawi_pattern = r'HR\.\s*(\w+)'
-        match = re.search(perawi_pattern, text, re.IGNORECASE)
-        if match:
-            metadata['perawi'] = match.group(1)
+        # 🔥 1. Deteksi KITAB dengan pattern lebih lengkap
+        kitab_patterns = [
+            r'(?:Shahih|Sahih|Sunan|Musnad|Muwaththa|Muwatta)\s+([A-Za-z\s]+?)(?=\s*(?:Bab|Hadis|HR|No|\d+|$))',
+            r'(?:صحيح|سنن|مسند|موطأ)\s+(\w+)',
+            r'Kitab\s+([A-Za-z\s]+?)(?=\s*(?:Bab|Hadis|HR|No|\d+|$))',
+        ]
+        for pattern in kitab_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                kitab = match.group(1).strip()
+                # Clean up
+                kitab = re.sub(r'\s+', ' ', kitab)
+                # Remove trailing words
+                kitab = re.sub(r'\s+(Bab|Hadis|HR|No).*', '', kitab, flags=re.IGNORECASE)
+                if len(kitab) > 3 and len(kitab) < 50:
+                    metadata['kitab'] = kitab
+                    break
         
-        # Deteksi nomor hadis
-        nomor_pattern = r'(?:Hadis|No)\s*[:\.]?\s*(\d+)'
-        match = re.search(nomor_pattern, text, re.IGNORECASE)
-        if match:
-            metadata['nomor_hadis'] = match.group(1)
-        
-        # Deteksi derajat hadis
-        derajat_keywords = ['shahih', 'hasan', 'dhaif', 'sahih', 'daif']
-        for keyword in derajat_keywords:
-            if re.search(rf'\b{keyword}\b', text, re.IGNORECASE):
-                metadata['derajat'] = keyword
+        # 🔥 2. Deteksi BAB dengan pattern lebih kuat
+        bab_patterns = [
+            r'Bab\s+(\d+)\s*[:\-]?\s*([^\n]{10,100})',  # "Bab 5: Tentang Shalat"
+            r'Bab\s*[:\-]\s*([^\n]{10,100})',  # "Bab: Tentang Shalat"
+            r'(?:باب|الباب)\s*[:\-]?\s*([^\n]{10,100})',  # Arab
+        ]
+        for pattern in bab_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                if len(match.groups()) == 2:
+                    bab_num, bab_title = match.groups()
+                    metadata['bab_nomor'] = bab_num
+                    metadata['bab'] = bab_title.strip()
+                else:
+                    metadata['bab'] = match.group(1).strip()
                 break
         
-        # Deteksi kitab
-        kitab_pattern = r'(?:Shahih|Sahih|Sunan|Musnad)\s+(\w+)'
-        match = re.search(kitab_pattern, text, re.IGNORECASE)
-        if match:
-            metadata['kitab'] = match.group(0)
+        # 🔥 3. Deteksi NOMOR HADIS dengan pattern lengkap
+        nomor_patterns = [
+            r'Hadis\s+(?:No\.?|Nomor)?\s*[:\-]?\s*(\d+)',
+            r'(?:No|Nomor)\s*[:\.]?\s*(\d+)',
+            r'HR\.\s*\w+\s+No\.\s*(\d+)',
+            r'^\s*(\d+)\.\s+',  # Nomor di awal baris
+        ]
+        for pattern in nomor_patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                metadata['nomor_hadis'] = match.group(1)
+                break
+        
+        # 🔥 4. Deteksi PERAWI
+        perawi_patterns = [
+            r'HR\.\s*(\w+(?:\s+\w+)?)',
+            r'Diriwayatkan\s+oleh\s+(\w+)',
+            r'Riwayat\s+(\w+)',
+        ]
+        for pattern in perawi_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                perawi = match.group(1).strip()
+                if perawi and len(perawi) < 50:
+                    metadata['perawi'] = perawi
+                    break
+        
+        # 🔥 5. Deteksi DERAJAT hadis
+        derajat_keywords = ['shahih', 'hasan', 'dhaif', 'sahih', 'daif', 'muttafaq']
+        for keyword in derajat_keywords:
+            if re.search(rf'\b{keyword}\b', text, re.IGNORECASE):
+                metadata['derajat'] = keyword.capitalize()
+                break
+        
+        # 🔥 6. Ekstrak teks Arab (untuk ditampilkan terpisah)
+        arabic_pattern = r'[\u0600-\u06FF\u0750-\u077F\u08A0-\u08FF\uFB50-\uFDFF\uFE70-\uFEFF]+'
+        arabic_matches = re.findall(arabic_pattern, text)
+        
+        if arabic_matches:
+            # Ambil teks Arab terpanjang (biasanya itu hadis utama)
+            longest_arabic = max(arabic_matches, key=len)
+            if len(longest_arabic) > 20:  # Minimal 20 karakter
+                metadata['arab'] = longest_arabic
         
         return metadata

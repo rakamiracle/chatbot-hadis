@@ -1,0 +1,15 @@
+======================================================================
+🚀 MIGRATING CHAT_HISTORY DIMENSIONS (384 -> 512)
+======================================================================
+
+1️⃣ Checking current dimensions...
+
+2️⃣ Altering columns to Vector(512)...
+   Executing: ALTER TABLE chat_history DROP COLUMN IF EXISTS query_embedding
+   Executing: ALTER TABLE chat_history DROP COLUMN IF EXISTS response_embedding
+   Executing: ALTER TABLE chat_history DROP COLUMN IF EXISTS combined_embedding
+   Executing: ALTER TABLE chat_history ADD COLUMN query_embedding Vector(512)
+   Executing: ALTER TABLE chat_history ADD COLUMN response_embedding Vector(512)
+   Executing: ALTER TABLE chat_history ADD COLUMN combined_embedding Vector(512)
+
+✅ MIGRATION SUCCESSFUL!

@@ -12,7 +12,7 @@ class HadisChunk(Base):
     chunk_text = Column(Text, nullable=False)
     chunk_index = Column(Integer)
     page_number = Column(Integer)
-    embedding = Column(Vector(384))
+    embedding = Column(Vector(512))  # Updated from 384 to 512 for distiluse model
     chunk_metadata = Column(JSONB)  # ← Ganti dari metadata ke chunk_metadata
     created_at = Column(DateTime, default=datetime.utcnow)
     document = relationship("HadisDocument", back_populates="chunks")
